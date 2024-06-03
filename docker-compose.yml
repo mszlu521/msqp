@@ -1,0 +1,52 @@
+version: "3.5"
+services:
+  nats:
+    image: nats
+    ports:
+      - "8222:8222"
+      - "4222:4222"
+    command: "--http_port 8222 "
+    networks: ["nats"]
+  Etcd:
+    container_name: etcd3
+    image: bitnami/etcd:${ETCD_VERSION}
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    environment:
+      - ALLOW_NONE_AUTHENTICATION=yes
+      - ETCD_SNAPSHOT_COUNT=10000
+      - ETCD_QUOTA_BACKEND_BYTES=6442450944
+    privileged: true
+    volumes:
+      - ${ETCD_DIR}/data:/bitnami/etcd/data
+    ports:
+      - ${ETCD_PORT}:2379
+      - 2380:2380
+  mongo:
+    image: mongo:4.2.1
+    restart: always
+    container_name: mongo
+    ports:
+      - 27018:27017
+    volumes:
+      - ${MONGO_DIR}/db:/data/db # 挂载数据目录
+      - ${MONGO_DIR}/log:/var/log/mongodb  # 挂载日志目录
+    privileged: true  # 设置容器的权限为root
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root  # 账号
+      MONGO_INITDB_ROOT_PASSWORD: root123456
+  Redis:
+    container_name: redis6
+    image: redis:${REDIS_VERSION}
+    restart: always
+    volumes:
+      - ${REDIS_DIR}/data:/data
+      - ${REDIS_DIR}/conf/redis.conf:/etc/redis/redis.conf
+    ports:
+      - ${REDIS_PORT}:6379
+    command: redis-server /etc/redis/redis.conf
+networks:
+  nats:
+    name: nats

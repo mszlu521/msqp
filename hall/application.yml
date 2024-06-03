@@ -1,0 +1,35 @@
+httpPort: 13000
+metricPort: 5857
+appName: hall
+log:
+  level: DEBUG
+db:
+  mongo:
+    url: mongodb://127.0.0.1:27018
+    userName: root
+    password: root123456
+    minPoolSize: 10
+    maxPoolSize: 100
+    db: msqp
+  redis:
+    addr: 127.0.0.1:6379
+    poolSize: 10
+    minIdleConns: 1
+    password:
+jwt:
+  secret: 123456
+  exp: 7
+domain:
+  user:
+    name: user/v1
+    loadBalance: true
+etcd:
+  addrs:
+    - 127.0.0.1:2379
+  rwTimeout: 3
+  dialTimeout: 3
+services:
+  connector:
+    id: connector-1
+    clientHost: 127.0.0.1
+    clientPort: 12000

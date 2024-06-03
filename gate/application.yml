@@ -1,0 +1,22 @@
+httpPort: 13000
+metricPort: 5855
+appName: gate
+log:
+  level: DEBUG
+jwt:
+  secret: 123456
+  exp: 7
+domain:
+  user:
+    name: user/v1
+    loadBalance: true
+etcd:
+  addrs:
+    - 127.0.0.1:2379
+  rwTimeout: 3
+  dialTimeout: 3
+services:
+  connector:
+    id: connector-1
+    clientHost: 127.0.0.1
+    clientPort: 12000

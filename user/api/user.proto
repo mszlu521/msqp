@@ -1,0 +1,29 @@
+syntax="proto3";
+option go_package = "user/pb;pb";//指定生成的位置和package
+message RegisterParams{
+  string account = 1;
+  string password = 2;
+  int32 loginPlatform = 3;
+  string smsCode = 4; 
+}
+message GetSMSCodeParams{
+  string phoneNumber = 1;
+}
+message LoginParams{
+  string account = 1;
+  string password = 2;
+  int32 loginPlatform = 3;
+  string smsCode = 4;
+}
+message RegisterResponse{
+  string uid = 1;
+}
+message LoginResponse{
+  string uid = 1;
+}
+message Empty{}
+service UserService{
+  rpc Register(RegisterParams) returns(RegisterResponse);
+  rpc GetSMSCode(GetSMSCodeParams) returns(Empty);
+  rpc Login(LoginParams) returns(LoginResponse);
+}

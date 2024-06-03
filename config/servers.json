@@ -1,0 +1,31 @@
+{
+  "nats": {
+    "url": "nats://localhost:4222"
+  },
+  "connector": [
+    {
+      "id": "connector001",
+      "host": "0.0.0.0",
+      "clientPort": 12000,
+      "frontend": true,
+      "heartTime": 5,
+      "serverType": "connector"
+    }
+  ],
+  "servers": [
+    {
+      "id": "hall-001",
+      "serverType": "hall",
+      "handleTimeOut": 10,
+      "rpcTimeOut": 5,
+      "maxRunRoutineNum": 10240
+    },
+    {
+      "id": "game-001",
+      "serverType": "game",
+      "handleTimeOut": 10,
+      "rpcTimeOut": 5,
+      "maxRunRoutineNum": 10240
+    }
+  ]
+}

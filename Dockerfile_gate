@@ -1,0 +1,13 @@
+FROM registry.cn-hangzhou.aliyuncs.com/mszlu/go:1.21 AS build-stage
+WORKDIR /app
+COPY . ./
+RUN go env -w GO111MODULE=on
+RUN go env -w GOPROXY=https://goproxy.cn,direct
+RUN go mod download
+RUN CGO_ENABLED=0 GOOS=linux go build  -o /app/gate/gate gate/main.go
+FROM registry.cn-hangzhou.aliyuncs.com/mszlu-gcrio/distroless_base-debian11 AS build-release-stage
+WORKDIR /app
+COPY --from=build-stage /app/gate/gate /app/gate
+EXPOSE 13000
+USER nonroot:nonroot
+ENTRYPOINT ["/app/gate"]
