@@ -1,0 +1,11 @@
+go 1.21.0
+use (
+	gate
+	common
+	connector
+	core
+	framework
+	game
+	hall
+	user
+)
