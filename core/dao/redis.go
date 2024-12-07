@@ -3,7 +3,9 @@ package dao
 import (
 	"context"
 	"core/repo"
+	"errors"
 	"fmt"
+	"github.com/redis/go-redis/v9"
 	"time"
 )
 
@@ -32,6 +34,10 @@ func (d *RedisDao) Get(ctx context.Context, key string) (string, error) {
 		value, err = d.repo.Redis.Cli.Get(ctx, key).Result()
 	} else {
 		value, err = d.repo.Redis.ClusterCli.Get(ctx, key).Result()
+
+	}
+	if errors.Is(err, redis.Nil) {
+		return "", nil
 	}
 	return value, err
 }
@@ -84,6 +90,10 @@ func (d *RedisDao) CheckSmsCode(account string, code string) bool {
 
 func (d *RedisDao) Register(number string, code string, second time.Duration) error {
 	return d.repo.Redis.Cli.Set(context.TODO(), Register+number, code, second).Err()
+}
+
+func (d *RedisDao) Delete(ctx context.Context, key string) error {
+	return d.repo.Redis.Cli.Del(ctx, key).Err()
 }
 
 func NewRedisDao(m *repo.Manager) *RedisDao {

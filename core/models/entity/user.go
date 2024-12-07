@@ -5,7 +5,7 @@ import "go.mongodb.org/mongo-driver/bson/primitive"
 type User struct {
 	Id               primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
 	Uid              string             `bson:"uid" json:"uid"`                           // 用户唯一ID
-	IsBlockedAccount int                `bson:"isBlockedAccount" json:"isBlockedAccount"` // 是否冻结帐号
+	IsBlockedAccount bool               `bson:"isBlockedAccount" json:"isBlockedAccount"` // 是否冻结帐号
 	Location         string             `bson:"location" json:"location"`                 // 地理位置信息，国家省市街道
 	FrontendId       string             `bson:"frontendId" json:"frontendId"`             // 前端服务器ID
 	RoomID           string             `bson:"roomID" json:"roomID"`                     // 房间ID

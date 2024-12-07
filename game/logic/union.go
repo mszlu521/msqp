@@ -1,6 +1,8 @@
 package logic
 
 import (
+	"common/biz"
+	"common/logs"
 	"core/models/entity"
 	"core/service"
 	"framework/msError"
@@ -17,18 +19,34 @@ type Union struct {
 	RoomList map[string]*room.Room
 }
 
-func (u *Union) CreateRoom(redisService *service.RedisService, session *remote.Session, req request.CreateRoomReq, userData *entity.User) *msError.Error {
-	//1. 需要创建一个房间 生成一个房间号
-	roomId := u.m.CreateRoomId()
-	newRoom := room.NewRoom(roomId, req.UnionID, req.GameRule, u)
-	u.RoomList[roomId] = newRoom
-	return newRoom.UserEntryRoom(redisService, session, userData)
+func (u *Union) CreateRoom(redisService *service.RedisService, userService *service.UserService, session *remote.Session, req request.CreateRoomReq, userData *entity.User) *msError.Error {
+	newRoom, err := u.createRoom(req)
+	if err != nil {
+		logs.Error("CreateRoom err:%v", err)
+		return biz.Fail
+	}
+	newRoom.UserService = userService
+	newRoom.RedisService = redisService
+	return newRoom.UserEntryRoom(session, userData)
 }
 
 func (u *Union) DismissRoom(roomId string) {
 	u.Lock()
 	defer u.Unlock()
 	delete(u.RoomList, roomId)
+}
+
+func (u *Union) createRoom(req request.CreateRoomReq) (*room.Room, error) {
+	u.Lock()
+	defer u.Unlock()
+	//1. 需要创建一个房间 生成一个房间号
+	roomId := u.m.CreateRoomId()
+	newRoom, err := room.NewRoom(roomId, req.UnionID, req.GameRule, u)
+	if err != nil {
+		return nil, err
+	}
+	u.RoomList[roomId] = newRoom
+	return newRoom, nil
 }
 func NewUnion(m *UnionManager) *Union {
 	return &Union{

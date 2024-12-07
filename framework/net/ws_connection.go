@@ -124,6 +124,6 @@ func NewWsConnection(conn *websocket.Conn, manager *Manager) *WsConnection {
 		Cid:       cid,
 		WriteChan: make(chan []byte, 1024),
 		ReadChan:  manager.ClientReadChan,
-		Session:   NewSession(cid),
+		Session:   NewSession(cid, manager),
 	}
 }

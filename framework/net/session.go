@@ -1,20 +1,28 @@
 package net
 
-import "sync"
+import (
+	"common/logs"
+	"encoding/json"
+	"framework/protocol"
+	"framework/stream"
+	"sync"
+)
 
 type Session struct {
 	sync.RWMutex
-	Cid  string
-	Uid  string
-	data map[string]any
-	all  map[string]any
+	Cid     string
+	Uid     string
+	data    map[string]any
+	all     map[string]any
+	manager *Manager
 }
 
-func NewSession(cid string) *Session {
+func NewSession(cid string, manager *Manager) *Session {
 	return &Session{
-		Cid:  cid,
-		data: make(map[string]any),
-		all:  make(map[string]any),
+		Cid:     cid,
+		data:    make(map[string]any),
+		all:     make(map[string]any),
+		manager: manager,
 	}
 }
 
@@ -43,5 +51,26 @@ func (s *Session) SetAll(data map[string]any) {
 	defer s.Unlock()
 	for k, v := range data {
 		s.all[k] = v
+	}
+}
+
+func (s *Session) PushData(dst string, router string, message *protocol.Message) {
+	msg := &stream.Msg{
+		Cid:         s.Cid,
+		Uid:         s.Uid,
+		Src:         s.manager.ServerId,
+		ConnectorId: s.manager.ServerId,
+		Dst:         dst,
+		Router:      router,
+		Body:        message,
+		SessionData: &stream.SessionData{
+			SingleData: s.data,
+			AllData:    s.all,
+		},
+	}
+	data, _ := json.Marshal(msg)
+	err := s.manager.RemoteCli.SendMsg(dst, data)
+	if err != nil {
+		logs.Error("push session data err:%v", err)
 	}
 }

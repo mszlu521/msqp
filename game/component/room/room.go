@@ -3,15 +3,15 @@ package room
 import (
 	"common/biz"
 	"common/logs"
+	"common/utils"
+	"context"
 	"core/models/entity"
 	"core/service"
 	"framework/msError"
 	"framework/remote"
 	"framework/stream"
 	"game/component/base"
-	"game/component/mj"
 	"game/component/proto"
-	"game/component/sz"
 	"game/models/request"
 	"log"
 	"sync"
@@ -29,20 +29,52 @@ const (
 
 type Room struct {
 	sync.RWMutex
-	Id            string
-	unionID       int64
-	gameRule      proto.GameRule
-	users         map[string]*proto.RoomUser
-	RoomCreator   *proto.RoomCreator
-	GameFrame     GameFrame
-	kickSchedules map[string]*time.Timer
-	union         base.UnionBase
-	roomDismissed bool
-	gameStarted   bool
-	askDismiss    map[int]struct{}
-	roomType      TypeRoom
+	Id                    string
+	unionID               int64
+	gameRule              proto.GameRule
+	users                 map[string]*proto.RoomUser
+	RoomCreator           *proto.RoomCreator
+	GameFrame             GameFrame
+	kickSchedules         map[string]*time.Timer
+	union                 base.UnionBase
+	roomDismissed         bool //房间是否被解散
+	gameStarted           bool //房间是否开始
+	askDismiss            map[int]struct{}
+	chairCount            int
+	roomType              TypeRoom
+	createTime            time.Time
+	lastNativeTime        time.Time
+	hasFinishedOneBureau  bool
+	hasStartedOneBureau   bool
+	alreadyCostUserUidArr []string
+	userJoinGameBureau    []string //记录玩家从第几局加入游戏
+	maxBureau             int      //最大局数
+	curBureau             int      //当前局数
+	clearUserArr          map[string]*proto.RoomUser
+	UserService           *service.UserService
+	RedisService          *service.RedisService
 }
 
+func (r *Room) resetRoom() error {
+	r.createTime = time.Now()
+	r.lastNativeTime = time.Now()
+	r.roomDismissed = false
+	r.gameStarted = false
+	r.hasFinishedOneBureau = false
+	r.hasStartedOneBureau = false
+	r.maxBureau = utils.Default(r.gameRule.Bureau, 8)
+	r.curBureau = 0
+	for _, v := range r.users {
+		v.WinScore = 0
+	}
+	r.clearUserArr = make(map[string]*proto.RoomUser)
+	var err error
+	r.GameFrame, err = NewGameFrame(r.gameRule, r)
+	if err != nil {
+		return err
+	}
+	return nil
+}
 func (r *Room) UserReady(uid string, session *remote.Session) {
 	r.userReady(uid, session)
 }
@@ -55,7 +87,6 @@ func (r *Room) EndGame(session *remote.Session) {
 }
 
 func (r *Room) UserEntryRoom(
-	redisService *service.RedisService,
 	session *remote.Session,
 	data *entity.User,
 ) *msError.Error {
@@ -80,10 +111,13 @@ func (r *Room) UserEntryRoom(
 		r.users[data.Uid] = proto.ToRoomUser(data, chairID, session.GetMsg().ConnectorId)
 	}
 	//2. 将房间号 推送给客户端 更新数据库 当前房间号存储起来
-	r.UpdateUserInfoRoomPush(session, data.Uid)
+	err := r.UpdateUserInfoRoomPush(session, data.Uid)
+	if err != nil {
+		return biz.SqlError
+	}
 	session.Put("roomId", r.Id, stream.Single)
 	//存储roomId和服务器的关系
-	err := redisService.Store(r.Id, session.GetDst())
+	err = r.RedisService.Store(r.Id, session.GetDst())
 	if err != nil {
 		return biz.SqlError
 	}
@@ -95,7 +129,12 @@ func (r *Room) UserEntryRoom(
 	return nil
 }
 
-func (r *Room) UpdateUserInfoRoomPush(session *remote.Session, uid string) {
+func (r *Room) UpdateUserInfoRoomPush(session *remote.Session, uid string) error {
+	//更新数据库用户信息
+	err := r.UserService.UpdateUserRoomId(context.Background(), uid, r.Id)
+	if err != nil {
+		return err
+	}
 	//{roomID: '336842', pushRouter: 'UpdateUserInfoPush'}
 	pushMsg := map[string]any{
 		"roomID":     r.Id,
@@ -104,6 +143,7 @@ func (r *Room) UpdateUserInfoRoomPush(session *remote.Session, uid string) {
 	//node节点 nats client，push 通过nats将消息发送给connector服务，connector将消息主动发给客户端
 	//ServerMessagePush
 	r.SendData(session.GetMsg(), []string{uid}, pushMsg)
+	return nil
 }
 
 func (r *Room) SelfEntryRoomPush(session *remote.Session, uid string) {
@@ -196,6 +236,10 @@ func (r *Room) kickUser(user *proto.RoomUser, session *remote.Session) {
 	}
 	r.SendData(session.GetMsg(), users, proto.UserLeaveRoomPushData(user))
 	delete(r.users, user.UserInfo.Uid)
+	err := r.UserService.UpdateUserRoomId(context.Background(), user.UserInfo.Uid, "")
+	if err != nil {
+		logs.Error("UpdateUserInfoPush err : %v", err)
+	}
 }
 
 func (r *Room) dismissRoom() {
@@ -207,6 +251,8 @@ func (r *Room) dismissRoom() {
 		return
 	}
 	r.roomDismissed = true
+	//将redis中房间信息删除掉
+	r.RedisService.Delete(r.Id)
 	//解散 将union当中存储的room信息 删除掉
 	r.cancelAllScheduler()
 	r.union.DismissRoom(r.Id)
@@ -241,9 +287,9 @@ func (r *Room) userReady(uid string, session *remote.Session) {
 	}
 }
 
-func (r *Room) JoinRoom(redisService *service.RedisService, session *remote.Session, data *entity.User) *msError.Error {
+func (r *Room) JoinRoom(session *remote.Session, data *entity.User) *msError.Error {
 
-	return r.UserEntryRoom(redisService, session, data)
+	return r.UserEntryRoom(session, data)
 }
 
 func (r *Room) OtherUserEntryRoomPush(session *remote.Session, uid string) {
@@ -291,7 +337,7 @@ func (r *Room) IsStartGame() bool {
 			userReadyCount++
 		}
 	}
-	if r.gameRule.GameType == int(proto.HongZhong) {
+	if r.gameRule.GameType == proto.HongZhong {
 		if len(r.users) == userReadyCount && userReadyCount >= r.gameRule.MaxPlayerCount {
 			return true
 		}
@@ -313,7 +359,7 @@ func (r *Room) startGame(session *remote.Session, user *proto.RoomUser) {
 	r.GameFrame.StartGame(session, user)
 }
 
-func NewRoom(id string, unionID int64, rule proto.GameRule, u base.UnionBase) *Room {
+func NewRoom(id string, unionID int64, rule proto.GameRule, u base.UnionBase) (*Room, error) {
 	r := &Room{
 		Id:            id,
 		unionID:       unionID,
@@ -322,14 +368,14 @@ func NewRoom(id string, unionID int64, rule proto.GameRule, u base.UnionBase) *R
 		kickSchedules: make(map[string]*time.Timer),
 		union:         u,
 		roomType:      TypeRoomNone,
+		chairCount:    rule.MaxPlayerCount,
 	}
-	if rule.GameType == int(proto.PinSanZhang) {
-		r.GameFrame = sz.NewGameFrame(rule, r)
+	var err error
+	r.GameFrame, err = NewGameFrame(rule, r)
+	if err != nil {
+		return nil, err
 	}
-	if rule.GameType == int(proto.HongZhong) {
-		r.GameFrame = mj.NewGameFrame(rule, r)
-	}
-	return r
+	return r, nil
 }
 
 func (r *Room) GetUsers() map[string]*proto.RoomUser {

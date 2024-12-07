@@ -16,6 +16,7 @@ func Register(r *repo.Manager) node.LogicHandler {
 	handlers["userHandler.searchUserData"] = userHandler.SearchUserData
 	unionHandler := handler.NewUnionHandler(r)
 	handlers["unionHandler.createUnion"] = unionHandler.CreateUnion
+	handlers["unionHandler.getUserUnionList"] = unionHandler.GetUserUnionList
 	gameHandler := handler.NewGameHandler(r)
 	handlers["gameHandler.joinRoom"] = gameHandler.JoinRoom
 	return handlers

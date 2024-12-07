@@ -38,11 +38,15 @@ func (s *UserService) FindAndSaveUserByUid(ctx context.Context, uid string, info
 		user.Sex = info.Sex //0 男 1 女
 		user.CreateTime = time.Now().UnixMilli()
 		user.LastLoginTime = time.Now().UnixMilli()
+		user.UnionInfo = []*entity.UnionInfo{}
 		err = s.userDao.Insert(context.TODO(), user)
 		if err != nil {
 			logs.Error("[UserService] FindAndSaveUserByUid insert user err:%v", err)
 			return nil, err
 		}
+	}
+	if user.UnionInfo == nil {
+		user.UnionInfo = []*entity.UnionInfo{}
 	}
 	return user, nil
 }
@@ -121,6 +125,15 @@ func (s *UserService) GetUserData(phone string, uid string) (*entity.User, *msEr
 		return user, nil
 	}
 	return nil, biz.RequestDataError
+}
+
+func (s *UserService) UpdateUserRoomId(ctx context.Context, uid string, roomId string) error {
+	err := s.userDao.UpdateUserRoomId(ctx, uid, roomId)
+	if err != nil {
+		logs.Error("UpdateUserRoomId err : %v", err)
+		return biz.SqlError
+	}
+	return nil
 }
 
 func NewUserService(r *repo.Manager) *UserService {

@@ -18,6 +18,7 @@ type RoomUser struct {
 	UserInfo   UserInfo   `json:"userInfo"`
 	ChairID    int        `json:"chairID"`
 	UserStatus UserStatus `json:"userStatus"`
+	WinScore   int        `json:"winScore"`
 }
 type UserInfo struct {
 	Uid          string `json:"uid"`

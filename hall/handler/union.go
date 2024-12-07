@@ -1,13 +1,18 @@
 package handler
 
 import (
+	"common"
+	"common/biz"
+	"context"
 	"core/dao"
 	"core/repo"
 	"framework/remote"
+	"hall/models/response"
 )
 
 type UnionHandler struct {
 	redisDao *dao.RedisDao
+	userDao  *dao.UserDao
 }
 
 // CreateUnion 创建联盟
@@ -30,8 +35,25 @@ func (h *UnionHandler) ExitUnion(session *remote.Session, msg []byte) any {
 
 // GetUserUnionList 获取用户联盟列表
 func (h *UnionHandler) GetUserUnionList(session *remote.Session, msg []byte) any {
-
-	return nil
+	uid := session.GetUid()
+	if len(uid) <= 0 {
+		return common.F(biz.InvalidUsers)
+	}
+	user, err := h.userDao.FindUserByUid(context.TODO(), uid)
+	if err != nil {
+		return common.F(biz.InvalidUsers)
+	}
+	var list []response.UnionRecord
+	for _, v := range user.UnionInfo {
+		list = append(list, response.UnionRecord{
+			UnionID: v.UnionID,
+		})
+	}
+	result := &response.UnionListResp{
+		RecordArr: list,
+	}
+	res := common.S(result)
+	return res
 }
 
 // GetMemberList 获取成员列表
@@ -156,5 +178,6 @@ func (h *UnionHandler) GetRankSingleDraw(session *remote.Session, msg []byte) an
 func NewUnionHandler(r *repo.Manager) *UnionHandler {
 	return &UnionHandler{
 		redisDao: dao.NewRedisDao(r),
+		userDao:  dao.NewUserDao(r),
 	}
 }

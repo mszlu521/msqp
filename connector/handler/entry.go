@@ -16,7 +16,8 @@ import (
 )
 
 type EntryHandler struct {
-	userService *service.UserService
+	userService  *service.UserService
+	redisService *service.RedisService
 }
 
 func (h *EntryHandler) Entry(session *net.Session, body []byte) (any, error) {
@@ -40,6 +41,10 @@ func (h *EntryHandler) Entry(session *net.Session, body []byte) (any, error) {
 		return common.F(biz.SqlError), nil
 	}
 	session.Uid = uid
+	// 检查帐号冻结
+	if user.IsBlockedAccount {
+		return common.F(biz.BlockedAccount), nil
+	}
 	return common.S(map[string]any{
 		"userInfo": user,
 		"config":   game.Conf.GetFrontGameConfig(),
@@ -48,6 +53,7 @@ func (h *EntryHandler) Entry(session *net.Session, body []byte) (any, error) {
 
 func NewEntryHandler(r *repo.Manager) *EntryHandler {
 	return &EntryHandler{
-		userService: service.NewUserService(r),
+		userService:  service.NewUserService(r),
+		redisService: service.NewRedisService(r),
 	}
 }

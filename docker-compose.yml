@@ -1,14 +1,14 @@
 version: "3.5"
 services:
   nats:
-    image: nats
+    image: nats-qp
     ports:
       - "8222:8222"
       - "4222:4222"
     command: "--http_port 8222 "
     networks: ["nats"]
   Etcd:
-    container_name: etcd3
+    container_name: etcd3-qp
     image: bitnami/etcd:${ETCD_VERSION}
     deploy:
       replicas: 1
@@ -27,7 +27,7 @@ services:
   mongo:
     image: mongo:4.2.1
     restart: always
-    container_name: mongo
+    container_name: mongo-qp
     ports:
       - 27018:27017
     volumes:
@@ -38,7 +38,7 @@ services:
       MONGO_INITDB_ROOT_USERNAME: root  # 账号
       MONGO_INITDB_ROOT_PASSWORD: root123456
   Redis:
-    container_name: redis6
+    container_name: redis6-qp
     image: redis:${REDIS_VERSION}
     restart: always
     volumes:

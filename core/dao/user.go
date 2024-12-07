@@ -87,6 +87,18 @@ func (d *UserDao) FindUserByPhone(ctx context.Context, phone string) (*entity.Us
 	return user, nil
 }
 
+func (d *UserDao) UpdateUserRoomId(ctx context.Context, uid string, roomId string) error {
+	db := d.repo.Mongo.Db.Collection("user")
+	_, err := db.UpdateOne(ctx, bson.M{
+		"uid": uid,
+	}, bson.M{
+		"$set": bson.M{
+			"roomID": roomId,
+		},
+	})
+	return err
+}
+
 func NewUserDao(m *repo.Manager) *UserDao {
 	return &UserDao{
 		repo: m,

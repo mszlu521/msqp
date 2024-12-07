@@ -68,11 +68,14 @@ func (u *UnionManager) GetRoomById(roomId string) *room.Room {
 	return nil
 }
 
-func (u *UnionManager) JoinRoom(service *service.RedisService, session *remote.Session, roomId string, data *entity.User) *msError.Error {
+func (u *UnionManager) JoinRoom(redisService *service.RedisService, session *remote.Session, roomId string, data *entity.User) *msError.Error {
 	for _, v := range u.unionList {
 		r, ok := v.RoomList[roomId]
 		if ok {
-			return r.JoinRoom(service, session, data)
+			if r.RedisService == nil {
+				r.RedisService = redisService
+			}
+			return r.JoinRoom(session, data)
 		}
 	}
 	return biz.RoomNotExist
