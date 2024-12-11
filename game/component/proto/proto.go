@@ -1,5 +1,9 @@
 package proto
 
+import (
+	"framework/msError"
+)
+
 type GameRule struct {
 	AddScores      []int    `json:"addScores"`      //加注分
 	BaseScore      int      `json:"baseScore"`      //底分 sz hz
@@ -23,13 +27,20 @@ type GameRule struct {
 	Fangzuobi      bool     `json:"fangzuobi"`      //防作弊 sz
 	MaxScore       int      `json:"maxScore"`       //最大加注分 sz
 	RoundType      int      `json:"roundType"`      //轮数 sz
+	ScoreLowLimit  int      `json:"scoreLowLimit"`  //最低分限制
 }
 
 type GameType int
 type SendCardType int
 type GameFrameType int
 type ScaleType int
+type RoomPayType int
 
+const (
+	AA    RoomPayType = 1
+	Win               = 2
+	MyPay             = 3
+)
 const (
 	PinSanZhang GameType = 1
 	NiuNiu               = 2
@@ -48,7 +59,7 @@ const (
 	UserLeaveRoomResponse                       = 403 //用户离开房间的回复
 	UserLeaveRoomPush                           = 404 //用户离开房间的推送
 	OtherUserEntryRoomPush                      = 402 // 用户进入房间的推送
-	DismissPush                                 = 405 //房间解散的推送
+	RoomDismissPush                             = 405 //房间解散的推送
 	UserInfoChangePush                          = 406 //房间用户信息变化的推送
 	UserChatNotify                              = 307 // 用户聊天通知
 	UserChatPush                                = 407 // 用户聊天推送
@@ -70,6 +81,21 @@ const (
 	UserChangeSeatNotify                        = 320 //换座通知
 	UserChangeSeatPush                          = 420
 )
+
+const (
+	ExitWaitSecond = 30
+)
+
+func RoomDismissPushData(reason RoomDismissReason) any {
+	pushMsg := map[string]any{
+		"type": RoomDismissPush,
+		"data": map[string]any{
+			"reason": reason,
+		},
+		"pushRouter": "RoomMessagePush",
+	}
+	return pushMsg
+}
 
 func UserChatPushData(fromChairID int, toChairID int, content string) any {
 	pushMsg := map[string]any{
@@ -156,6 +182,38 @@ func AskForDismissPushData(data *DismissPushData) any {
 	pushMsg := map[string]any{
 		"type":       AskForDismissPush,
 		"data":       data,
+		"pushRouter": "RoomMessagePush",
+	}
+	return pushMsg
+}
+func GetUserChangeSeatPush(fromChairID, toChairID int, uid string) any {
+	pushMsg := map[string]any{
+		"type": UserChangeSeatPush,
+		"data": map[string]any{
+			"fromChairID": fromChairID,
+			"toChairID":   toChairID,
+			"uid":         uid,
+		},
+		"pushRouter": "RoomMessagePush",
+	}
+	return pushMsg
+}
+
+func PopDialogContentPushData(code *msError.Error) any {
+	pushMsg := map[string]any{
+		"code":       code.Code,
+		"content":    code.Error(),
+		"pushRouter": "PopDialogContentPush",
+	}
+	return pushMsg
+}
+
+func UserInfoChangePushData(userInfo *UserInfo) any {
+	pushMsg := map[string]any{
+		"type": UserInfoChangePush,
+		"data": map[string]any{
+			"changeInfo": userInfo,
+		},
 		"pushRouter": "RoomMessagePush",
 	}
 	return pushMsg

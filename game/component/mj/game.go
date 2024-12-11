@@ -23,6 +23,34 @@ type GameFrame struct {
 	turnSchedule  []*time.Timer
 }
 
+func (g *GameFrame) OnEventRoomDismiss(reason proto.RoomDismissReason, session *remote.Session) {
+	var userArray []*DismissUser
+	var creator Creator
+	for _, v := range g.r.GetUsers() {
+		userArray = append(userArray, &DismissUser{
+			Uid:      v.UserInfo.Uid,
+			Nickname: v.UserInfo.Nickname,
+			Avatar:   v.UserInfo.Avatar,
+		})
+		if v.UserInfo.Uid == g.r.GetCreator().Uid {
+			creator = Creator{
+				Uid:      v.UserInfo.Uid,
+				Nickname: v.UserInfo.Nickname,
+				Avatar:   v.UserInfo.Avatar,
+			}
+		}
+	}
+	g.r.SendDataAll(session.GetMsg(), GameDismissPushData(userArray, &creator, reason, nil))
+}
+
+func (g *GameFrame) OnEventGameStart(user *proto.RoomUser, session *remote.Session) {
+	g.startGame(session, user)
+}
+
+func (g *GameFrame) OnEventUserEntry(user *proto.RoomUser, session *remote.Session) {
+	//TODO implement me
+}
+
 func (g *GameFrame) sendData(data any, users []string, session *remote.Session) {
 	g.r.SendData(session.GetMsg(), users, data)
 }
@@ -36,7 +64,7 @@ func (g *GameFrame) OnEventUserOffLine(user *proto.RoomUser, session *remote.Ses
 	}
 }
 
-func (g *GameFrame) IsUserEnableLeave() bool {
+func (g *GameFrame) IsUserEnableLeave(chairID int) bool {
 	return g.gameData.GameStatus == GameStatusNone
 }
 
@@ -72,7 +100,7 @@ func (g *GameFrame) GetGameData(session *remote.Session) any {
 	return gameData
 }
 
-func (g *GameFrame) StartGame(session *remote.Session, user *proto.RoomUser) {
+func (g *GameFrame) startGame(session *remote.Session, user *proto.RoomUser) {
 	// 开始游戏
 	//1 游戏状态 初始状态 推送
 	g.gameData.GameStarted = true
@@ -360,7 +388,7 @@ func (g *GameFrame) onGameTurnOperate(user *proto.RoomUser, session *remote.Sess
 		g.gameData.OperateArrays[user.ChairID] = nil
 		//2. 让用户开始出牌
 		g.gameData.CurChairID = user.ChairID
-		g.gameEnd(data.Operate, session)
+		g.gameEnd(session)
 	} else if data.Operate == HuZi {
 		//一定是自己摸牌操作
 		g.sendDataAll(GameTurnOperatePushData(user.ChairID, data.Card, data.Operate, true), session)
@@ -369,7 +397,7 @@ func (g *GameFrame) onGameTurnOperate(user *proto.RoomUser, session *remote.Sess
 		g.gameData.OperateArrays[user.ChairID] = nil
 		//2. 让用户开始出牌
 		g.gameData.CurChairID = user.ChairID
-		g.gameEnd(data.Operate, session)
+		g.gameEnd(session)
 	} else if data.Operate == GangZi {
 		//1. 当前用户的操作是否成功 告诉所有人
 		card := g.gameData.HandCards[user.ChairID][len(g.gameData.HandCards[user.ChairID])-1]
@@ -482,7 +510,7 @@ func (g *GameFrame) nextTurn(lastCard mp.CardID, session *remote.Session) {
 	}
 }
 
-func (g *GameFrame) gameEnd(operate OperateType, session *remote.Session) {
+func (g *GameFrame) gameEnd(session *remote.Session) {
 	g.gameData.GameStatus = Result
 	g.sendDataAll(GameStatusPushData(g.gameData.GameStatus, 0), session)
 	scores := make([]int, g.gameData.ChairCount)

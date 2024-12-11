@@ -26,6 +26,15 @@ type User struct {
 	Avatar           string             `bson:"avatar" json:"avatar"`               // 头像
 }
 
+func (u *User) GetUnionItem(unionID int64) *UnionInfo {
+	for _, v := range u.UnionInfo {
+		if v.UnionID == unionID {
+			return v
+		}
+	}
+	return nil
+}
+
 type InviteMsg struct {
 	Uid       string `bson:"uid" json:"uid"`             // 邀请人ID
 	Nickname  string `bson:"nickname" json:"nickname"`   // 邀请人名字

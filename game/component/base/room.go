@@ -13,4 +13,5 @@ type RoomFrame interface {
 	UserReady(uid string, session *remote.Session)
 	SendData(msg *stream.Msg, users []string, data any)
 	SendDataAll(msg *stream.Msg, data any)
+	GetCreator() *proto.RoomCreator
 }

@@ -11,10 +11,12 @@ import (
 
 type GameFrame interface {
 	GetGameData(session *remote.Session) any
-	StartGame(session *remote.Session, user *proto.RoomUser)
 	GameMessageHandle(user *proto.RoomUser, session *remote.Session, msg []byte)
-	IsUserEnableLeave() bool
+	IsUserEnableLeave(chairID int) bool
 	OnEventUserOffLine(user *proto.RoomUser, session *remote.Session)
+	OnEventUserEntry(user *proto.RoomUser, session *remote.Session)
+	OnEventGameStart(user *proto.RoomUser, session *remote.Session)
+	OnEventRoomDismiss(reason proto.RoomDismissReason, session *remote.Session)
 }
 
 func NewGameFrame(rule proto.GameRule, r base.RoomFrame) (GameFrame, error) {

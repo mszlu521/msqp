@@ -8,8 +8,9 @@ type RoomMessageReq struct {
 }
 
 type RoomMessageData struct {
-	IsReady   bool   `json:"isReady"`
-	IsExit    bool   `json:"isExit"`
-	ToChairID int    `json:"toChairID"`
-	Msg       string `json:"msg"`
+	IsReady     bool   `json:"isReady"`
+	IsExit      bool   `json:"isExit"`
+	ToChairID   int    `json:"toChairID"`
+	Msg         string `json:"msg"`
+	FromChairID int    `json:"fromChairID"`
 }

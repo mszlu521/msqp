@@ -20,7 +20,7 @@ type Union struct {
 }
 
 func (u *Union) CreateRoom(redisService *service.RedisService, userService *service.UserService, session *remote.Session, req request.CreateRoomReq, userData *entity.User) *msError.Error {
-	newRoom, err := u.createRoom(req)
+	newRoom, err := u.createRoom(req, userData.Uid)
 	if err != nil {
 		logs.Error("CreateRoom err:%v", err)
 		return biz.Fail
@@ -36,12 +36,12 @@ func (u *Union) DismissRoom(roomId string) {
 	delete(u.RoomList, roomId)
 }
 
-func (u *Union) createRoom(req request.CreateRoomReq) (*room.Room, error) {
+func (u *Union) createRoom(req request.CreateRoomReq, uid string) (*room.Room, error) {
 	u.Lock()
 	defer u.Unlock()
 	//1. 需要创建一个房间 生成一个房间号
 	roomId := u.m.CreateRoomId()
-	newRoom, err := room.NewRoom(roomId, req.UnionID, req.GameRule, u)
+	newRoom, err := room.NewRoom(uid, roomId, req.UnionID, req.GameRule, u)
 	if err != nil {
 		return nil, err
 	}

@@ -1,6 +1,9 @@
 package mj
 
-import "game/component/mj/mp"
+import (
+	"game/component/mj/mp"
+	"game/component/proto"
+)
 
 type MessageReq struct {
 	Type int         `json:"type"`
@@ -122,6 +125,38 @@ const (
 	GameGetCardPush        = 415 //拿牌推送
 )
 
+type DismissUser struct {
+	Uid           string `json:"uid"`
+	Nickname      string `json:"nickname"`
+	Avatar        string `json:"avatar"`
+	HuCount       int    `json:"huCount"`
+	GongGangCount int    `json:"gongGangCount"`
+	AnGangCount   int    `json:"anGangCount"`
+	MaCount       int    `json:"maCount"`
+	WinScore      int    `json:"winScore"`
+}
+type Creator struct {
+	Uid      string `json:"uid"`
+	Nickname string `json:"nickname"`
+	Avatar   string `json:"avatar"`
+}
+
+func GameDismissPushData(
+	userArray []*DismissUser,
+	creator *Creator,
+	reason proto.RoomDismissReason,
+	hongBaoList []string) any {
+	return map[string]any{
+		"type": GameDismissPush,
+		"data": map[string]any{
+			"userArray":   userArray,
+			"creator":     creator,
+			"reason":      reason,
+			"hongBaoList": hongBaoList,
+		},
+		"pushRouter": "GameMessagePush",
+	}
+}
 func GameStatusPushData(gameStatus GameStatus, tick int) any {
 	return map[string]any{
 		"type": GameStatusPush,

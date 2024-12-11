@@ -137,6 +137,31 @@ const (
 	GameReviewPush      = 416
 )
 
+type Creator struct {
+	Uid      string `json:"uid"`
+	Nickname string `json:"nickname"`
+	Avatar   string `json:"avatar"`
+}
+
+func GameEndPushData(
+	result any,
+	winMost any,
+	loseMost any,
+	creater any,
+	hongBaoList any) any {
+	return map[string]any{
+		"type": GameEndPush,
+		"data": map[string]any{
+			"result":      result,
+			"winMost":     winMost,
+			"loseMost":    loseMost,
+			"creater":     creater,
+			"hongBaoList": hongBaoList,
+		},
+		"pushRouter": "GameMessagePush",
+	}
+}
+
 // UpdateUserInfoPushGold  {"gold": 9958, "pushRouter": 'UpdateUserInfoPush'}
 func UpdateUserInfoPushGold(gold int64) any {
 	return map[string]any{

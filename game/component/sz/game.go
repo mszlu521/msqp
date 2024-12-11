@@ -19,6 +19,28 @@ type GameFrame struct {
 	gameResult *GameResult
 }
 
+func (g *GameFrame) OnEventRoomDismiss(reason proto.RoomDismissReason, session *remote.Session) {
+	var creator Creator
+	for _, v := range g.r.GetUsers() {
+		if v.UserInfo.Uid == g.r.GetCreator().Uid {
+			creator = Creator{
+				Uid:      v.UserInfo.Uid,
+				Nickname: v.UserInfo.Nickname,
+				Avatar:   v.UserInfo.Avatar,
+			}
+		}
+	}
+	g.sendDataAll(GameEndPushData([]string{}, nil, nil, &creator, nil), session)
+}
+
+func (g *GameFrame) OnEventGameStart(user *proto.RoomUser, session *remote.Session) {
+	g.startGame(session, user)
+}
+
+func (g *GameFrame) OnEventUserEntry(user *proto.RoomUser, session *remote.Session) {
+	//TODO implement me
+}
+
 func (g *GameFrame) sendData(data any, users []string, session *remote.Session) {
 	g.r.SendData(session.GetMsg(), users, data)
 }
@@ -28,10 +50,9 @@ func (g *GameFrame) sendDataAll(data any, session *remote.Session) {
 
 func (g *GameFrame) OnEventUserOffLine(user *proto.RoomUser, session *remote.Session) {
 	//TODO implement me
-	panic("implement me")
 }
 
-func (g *GameFrame) IsUserEnableLeave() bool {
+func (g *GameFrame) IsUserEnableLeave(int) bool {
 	return g.gameData.GameStatus == GameStatusNone
 }
 
@@ -98,7 +119,7 @@ func (g *GameFrame) GetGameData(session *remote.Session) any {
 	return gameData
 }
 
-func (g *GameFrame) StartGame(session *remote.Session, user *proto.RoomUser) {
+func (g *GameFrame) startGame(session *remote.Session, user *proto.RoomUser) {
 	//1.用户信息变更推送（金币变化） {"gold": 9958, "pushRouter": 'UpdateUserInfoPush'}
 	users := g.getAllUsers()
 	g.sendDataAll(UpdateUserInfoPushGold(user.UserInfo.Gold), session)

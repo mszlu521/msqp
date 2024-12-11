@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -19,13 +20,17 @@ var (
 )
 
 type WsConnection struct {
-	Cid        string
-	Conn       *websocket.Conn
-	manager    *Manager
-	ReadChan   chan *MsgPack
-	WriteChan  chan []byte
-	Session    *Session
-	pingTicker *time.Ticker
+	Cid           string
+	Conn          *websocket.Conn
+	manager       *Manager
+	ReadChan      chan *MsgPack
+	WriteChan     chan []byte
+	Session       *Session
+	pingTicker    *time.Ticker
+	closeChan     chan struct{}
+	closeOnce     sync.Once
+	readChanOnce  sync.Once
+	writeChanOnce sync.Once
 }
 
 func (c *WsConnection) GetSession() *Session {
@@ -38,12 +43,19 @@ func (c *WsConnection) SendMessage(buf []byte) error {
 }
 
 func (c *WsConnection) Close() {
-	if c.Conn != nil {
-		c.Conn.Close()
-	}
-	if c.pingTicker != nil {
-		c.pingTicker.Stop()
-	}
+	//确保只执行一次
+	c.closeOnce.Do(func() {
+		//因为只执行一次 这里不用检查是否已经关闭了
+		close(c.closeChan)
+		if c.Conn != nil {
+			_ = c.Conn.Close()
+		}
+		// 停止定时器
+		if c.pingTicker != nil {
+			c.pingTicker.Stop()
+		}
+		logs.Info("client[%s] connection closed", c.Cid)
+	})
 }
 
 func (c *WsConnection) Run() {
@@ -54,8 +66,15 @@ func (c *WsConnection) Run() {
 }
 
 func (c *WsConnection) writeMessage() {
-
 	c.pingTicker = time.NewTicker(pingInterval)
+	defer func() {
+		// 清理通道
+		if c.WriteChan != nil {
+			c.writeChanOnce.Do(func() {
+				close(c.WriteChan)
+			})
+		}
+	}()
 	for {
 		select {
 		case message, ok := <-c.WriteChan:
@@ -63,6 +82,7 @@ func (c *WsConnection) writeMessage() {
 				if err := c.Conn.WriteMessage(websocket.CloseMessage, nil); err != nil {
 					logs.Error("connection closed, %v", err)
 				}
+				c.Close()
 				return
 			}
 			//logs.Error("%v", stream)
@@ -77,12 +97,17 @@ func (c *WsConnection) writeMessage() {
 				logs.Error("client[%s] ping  err :%v", c.Cid, err)
 				c.Close()
 			}
+		case <-c.closeChan:
+			logs.Info("client[%s] writeMessage stopped", c.Cid)
+			return
+
 		}
 	}
 }
 
 func (c *WsConnection) readMessage() {
 	defer func() {
+		logs.Info("client[%s] readMessage stopped", c.Cid)
 		c.manager.removeClient(c)
 	}()
 	c.Conn.SetReadLimit(maxMessageSize)
@@ -91,21 +116,33 @@ func (c *WsConnection) readMessage() {
 		return
 	}
 	for {
-		messageType, message, err := c.Conn.ReadMessage()
-		if err != nil {
-			break
-		}
-		//客户端发来的消息是二进制消息
-		if messageType == websocket.BinaryMessage {
-			if c.ReadChan != nil {
-				c.ReadChan <- &MsgPack{
-					Cid:  c.Cid,
-					Body: message,
+		select {
+		case <-c.closeChan:
+			// 检测到关闭信号，退出协程
+			logs.Info("client[%s] received close signal", c.Cid)
+			return
+		default:
+			messageType, message, err := c.Conn.ReadMessage()
+			if err != nil {
+				// 检测到错误或连接关闭，退出循环
+				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+					logs.Error("client[%s] unexpected close error: %v", c.Cid, err)
 				}
+				return
 			}
-		} else {
-			logs.Error("unsupported stream type : %d", messageType)
+			//客户端发来的消息是二进制消息
+			if messageType == websocket.BinaryMessage {
+				select {
+				case c.ReadChan <- &MsgPack{Cid: c.Cid, Body: message}:
+				case <-c.closeChan:
+					logs.Info("client[%s] readMessage stopped while sending to channel", c.Cid)
+					return
+				}
+			} else {
+				logs.Error("unsupported stream type : %d", messageType)
+			}
 		}
+
 	}
 }
 
@@ -125,5 +162,6 @@ func NewWsConnection(conn *websocket.Conn, manager *Manager) *WsConnection {
 		WriteChan: make(chan []byte, 1024),
 		ReadChan:  manager.ClientReadChan,
 		Session:   NewSession(cid, manager),
+		closeChan: make(chan struct{}),
 	}
 }
