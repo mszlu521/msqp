@@ -5,38 +5,39 @@ type MessageReq struct {
 	Data MessageData `json:"data"`
 }
 type MessageData struct {
-	Cuopai  bool `json:"cuopai"`
-	Score   int  `json:"score"`
-	Type    int  `json:"type"` //1 跟注 2 加注
-	ChairID int  `json:"chairID"`
+	Cuopai      bool   `json:"cuopai"`
+	Score       int    `json:"score"`
+	Type        int    `json:"type"` //1 跟注 2 加注
+	ChairID     int    `json:"chairID"`
+	Msg         string `json:"msg"`
+	RecipientID int    `json:"recipientID"`
+	Trust       bool   `json:"trust"`
 }
 type GameStatus int
 
 type GameData struct {
-	BankerChairID   int                      `json:"bankerChairID"`
-	ChairCount      int                      `json:"chairCount"`
-	CurBureau       int                      `json:"curBureau"`
-	CurScore        int                      `json:"curScore"`
-	CurScores       []int                    `json:"curScores"`
-	GameStarter     bool                     `json:"gameStarter"`
-	GameStatus      GameStatus               `json:"gameStatus"`
-	HandCards       [][]int                  `json:"handCards"`
-	LookCards       []int                    `json:"lookCards"`
-	Loser           []int                    `json:"loser"`
-	Winner          []int                    `json:"winner"`
-	MaxBureau       int                      `json:"maxBureau"`
-	PourScores      [][]int                  `json:"pourScores"`
-	GameType        GameType                 `json:"gameType"`
-	BaseScore       int                      `json:"baseScore"`
-	Result          any                      `json:"result"`
-	Round           int                      `json:"round"`
-	Tick            int                      `json:"tick"` //倒计时
-	UserTrustArray  []bool                   `json:"userTrustArray"`
-	UserStatusArray []UserStatus             `json:"userStatusArray"`
-	UserWinRecord   map[string]UserWinRecord `json:"userWinRecord"`
-	ReviewRecord    []BureauReview           `json:"reviewRecord"`
-	TrustTmArray    []int                    `json:"trustTmArray"`
-	CurChairID      int                      `json:"curChairID"`
+	BankerChairID   int          `json:"bankerChairID"`
+	ChairCount      int          `json:"chairCount"`
+	CurBureau       int          `json:"curBureau"`
+	CurScore        int          `json:"curScore"`
+	CurScores       []int        `json:"curScores"`
+	GameStarter     bool         `json:"gameStarter"`
+	GameStatus      GameStatus   `json:"gameStatus"`
+	HandCards       [][]int      `json:"handCards"`
+	LookCards       []int        `json:"lookCards"`
+	Loser           []int        `json:"loser"`
+	Winner          []int        `json:"winner"`
+	MaxBureau       int          `json:"maxBureau"`
+	PourScores      [][]int      `json:"pourScores"`
+	GameType        GameType     `json:"gameType"`
+	BaseScore       int          `json:"baseScore"`
+	Result          any          `json:"result"`
+	Round           int          `json:"round"`
+	Tick            int          `json:"tick"` //倒计时
+	UserTrustArray  []bool       `json:"userTrustArray"`
+	UserStatusArray []UserStatus `json:"userStatusArray"`
+	TrustTmArray    []int        `json:"trustTmArray"`
+	CurChairID      int          `json:"curChairID"`
 }
 
 // None 初始状态
@@ -106,7 +107,7 @@ type BureauReview struct {
 	Cards     []int  `json:"cards"`
 	PourScore int    `json:"pourScore"`
 	WinScore  int    `json:"winScore"`
-	NickName  string `json:"nickName"`
+	Nickname  string `json:"nickname"`
 	Avatar    string `json:"avatar"`
 	IsBanker  bool   `json:"isBanker"`
 	IsAbandon bool   `json:"isAbandon"`
@@ -137,10 +138,54 @@ const (
 	GameReviewPush      = 416
 )
 
+const (
+	AbandonTypeNone    int = iota //其他
+	AbandonTypeAbandon            //主动弃牌
+)
+const (
+	PourTypeNone int = iota //其他方式
+	PourTypeGen             //跟注
+	PourTypeAdd             //加注
+)
+
+var rounds = []int{0, 10, 15, 20}
+
 type Creator struct {
 	Uid      string `json:"uid"`
 	Nickname string `json:"nickname"`
 	Avatar   string `json:"avatar"`
+}
+
+func gameReviewPushData(list []*BureauReview) any {
+	return map[string]any{
+		"type": GameReviewPush,
+		"data": map[string]any{
+			"list": list,
+		},
+		"pushRouter": "GameMessagePush",
+	}
+}
+func gameTrustPushData(chairID int, trust bool) any {
+	return map[string]any{
+		"type": GameTrustPush,
+		"data": map[string]any{
+			"chairID": chairID,
+			"trust":   trust,
+		},
+		"pushRouter": "GameMessagePush",
+	}
+}
+func gameChatPushData(chairID int, types int, msg string, recipientID int) any {
+	return map[string]any{
+		"type": GameChatPush,
+		"data": map[string]any{
+			"chairID":     chairID,
+			"type":        types,
+			"msg":         msg,
+			"recipientID": recipientID,
+		},
+		"pushRouter": "GameMessagePush",
+	}
 }
 
 func GameEndPushData(
@@ -314,12 +359,13 @@ func GameResultPushData(result *GameResult) any {
 		"pushRouter": "GameMessagePush",
 	}
 }
-func GameAbandonPushData(chairID int, userStatus UserStatus) any {
+func GameAbandonPushData(chairID int, userStatus UserStatus, types int) any {
 	return map[string]any{
 		"type": GameAbandonPush,
 		"data": map[string]any{
 			"chairID":    chairID,
 			"userStatus": userStatus,
+			"type":       types,
 		},
 		"pushRouter": "GameMessagePush",
 	}

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"framework/game"
 	"framework/msError"
+	"go.mongodb.org/mongo-driver/bson"
 	hall "hall/models/request"
 	"time"
 )
@@ -19,6 +20,7 @@ import (
 type UserService struct {
 	userDao    *dao.UserDao
 	accountDao *dao.AccountDao
+	recordDao  *dao.RecordDao
 }
 
 func (s *UserService) FindAndSaveUserByUid(ctx context.Context, uid string, info request.UserInfo) (*entity.User, error) {
@@ -136,9 +138,44 @@ func (s *UserService) UpdateUserRoomId(ctx context.Context, uid string, roomId s
 	return nil
 }
 
+func (s *UserService) UpdateUserDataScoreInc(uid string, unionID int64, score int) *entity.User {
+	ctx := context.Background()
+	matchData := bson.M{"unionInfo.unionID": unionID, "uid": uid}
+	saveData := bson.M{"$inc": bson.M{"unionInfo.$.score": score}}
+	user, err := s.userDao.FindAndUpdate(ctx, matchData, saveData)
+	if err != nil {
+		logs.Error("FindAndUpdate err : %v", err)
+		return nil
+	}
+	return user
+}
+
+func (s *UserService) UpdateUserData(matchData bson.M, saveData bson.M) *entity.User {
+	ctx := context.Background()
+	user, err := s.userDao.FindAndUpdate(ctx, matchData, saveData)
+	if err != nil {
+		logs.Error("FindAndUpdate err : %v", err)
+		return nil
+	}
+	return user
+}
+
+func (s *UserService) SaveUserScoreChangeRecordList(arr []*entity.UserScoreChangeRecord) error {
+	err := s.recordDao.CreateUserScoreChangeRecordList(context.TODO(), arr)
+	if err != nil {
+		logs.Error("saveUserScoreChangeRecordList err : %v", err)
+		return biz.SqlError
+	}
+	return nil
+}
+
+func (s *UserService) SaveUserRebateRecord(data *entity.UserRebateRecord) error {
+	return s.recordDao.CreateUserRebateRecord(context.TODO(), data)
+}
 func NewUserService(r *repo.Manager) *UserService {
 	return &UserService{
 		userDao:    dao.NewUserDao(r),
 		accountDao: dao.NewAccountDao(r),
+		recordDao:  dao.NewRecordDao(r),
 	}
 }

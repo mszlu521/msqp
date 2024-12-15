@@ -3,6 +3,7 @@ package mj
 import (
 	"common/logs"
 	"common/utils"
+	"core/models/enums"
 	"encoding/json"
 	"framework/remote"
 	"game/component/base"
@@ -23,7 +24,7 @@ type GameFrame struct {
 	turnSchedule  []*time.Timer
 }
 
-func (g *GameFrame) OnEventRoomDismiss(reason proto.RoomDismissReason, session *remote.Session) {
+func (g *GameFrame) OnEventRoomDismiss(reason enums.RoomDismissReason, session *remote.Session) {
 	var userArray []*DismissUser
 	var creator Creator
 	for _, v := range g.r.GetUsers() {
@@ -68,7 +69,7 @@ func (g *GameFrame) IsUserEnableLeave(chairID int) bool {
 	return g.gameData.GameStatus == GameStatusNone
 }
 
-func (g *GameFrame) GetGameData(session *remote.Session) any {
+func (g *GameFrame) GetEnterGameData(session *remote.Session) any {
 	//获取场景 获取游戏的数据
 	//mj 打牌的时候 别人的牌 不能看到
 	user := g.r.GetUsers()[session.GetUid()]

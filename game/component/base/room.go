@@ -14,4 +14,9 @@ type RoomFrame interface {
 	SendData(msg *stream.Msg, users []string, data any)
 	SendDataAll(msg *stream.Msg, data any)
 	GetCreator() *proto.RoomCreator
+	ConcludeGame(data []*proto.EndData, session *remote.Session)
+	IsDismissing() bool
+	SetCurBureau(int)
+	GetCurBureau() int
+	GetMaxBureau() int
 }

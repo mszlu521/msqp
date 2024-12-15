@@ -7,16 +7,19 @@ import (
 
 // Task 定时任务结构体
 type Task struct {
+	Name     string
 	ticker   *time.Ticker
 	stopChan chan struct{}
 	wg       sync.WaitGroup
+	once     sync.Once
 }
 
 // NewTask 创建一个新的定时任务
-func NewTask(interval time.Duration, job func()) *Task {
+func NewTask(name string, interval time.Duration, job func()) *Task {
 	task := &Task{
 		ticker:   time.NewTicker(interval),
 		stopChan: make(chan struct{}),
+		Name:     name,
 	}
 
 	task.wg.Add(1)
@@ -37,6 +40,8 @@ func NewTask(interval time.Duration, job func()) *Task {
 // Stop 停止定时任务
 func (t *Task) Stop() {
 	t.ticker.Stop()
-	close(t.stopChan)
+	t.once.Do(func() {
+		close(t.stopChan)
+	})
 	t.wg.Wait()
 }

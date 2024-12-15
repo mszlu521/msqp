@@ -99,6 +99,16 @@ func (d *UserDao) UpdateUserRoomId(ctx context.Context, uid string, roomId strin
 	return err
 }
 
+func (d *UserDao) FindAndUpdate(ctx context.Context, matchData bson.M, saveData bson.M) (*entity.User, error) {
+	db := d.repo.Mongo.Db.Collection("user")
+	var user entity.User
+	err := db.FindOneAndUpdate(ctx, matchData, saveData).Decode(&user)
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
 func NewUserDao(m *repo.Manager) *UserDao {
 	return &UserDao{
 		repo: m,

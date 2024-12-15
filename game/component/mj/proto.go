@@ -1,8 +1,8 @@
 package mj
 
 import (
+	"core/models/enums"
 	"game/component/mj/mp"
-	"game/component/proto"
 )
 
 type MessageReq struct {
@@ -144,7 +144,7 @@ type Creator struct {
 func GameDismissPushData(
 	userArray []*DismissUser,
 	creator *Creator,
-	reason proto.RoomDismissReason,
+	reason enums.RoomDismissReason,
 	hongBaoList []string) any {
 	return map[string]any{
 		"type": GameDismissPush,

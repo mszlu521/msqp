@@ -1,6 +1,9 @@
 package entity
 
-import "go.mongodb.org/mongo-driver/bson/primitive"
+import (
+	"core/models/enums"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+)
 
 type GameProfitRecord struct {
 	Id  primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
@@ -76,7 +79,7 @@ type UserRebateRecord struct {
 	Uid        string             `bson:"uid" json:"uid"`
 	RoomID     string             `bson:"roomID" json:"roomID"`
 	GameType   int                `bson:"gameType" json:"gameType"`
-	UnionID    string             `bson:"unionID" json:"unionID"`
+	UnionID    int64              `bson:"unionID" json:"unionID"`
 	PlayerUid  string             `bson:"playerUid" json:"playerUid"`
 	TotalCount int                `bson:"totalCount" json:"totalCount"`
 	GainCount  int                `bson:"gainCount" json:"gainCount"`
@@ -89,7 +92,7 @@ type UserScoreChangeRecord struct {
 	Id       primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
 	Uid      string             `bson:"uid" json:"uid"`
 	Nickname string             `bson:"nickname" json:"nickname"`
-	UnionID  string             `bson:"unionID" json:"unionID"`
+	UnionID  int64              `bson:"unionID" json:"unionID"`
 	// 分数变化
 	ChangeCount int64 `bson:"changeCount" json:"changeCount"`
 	// 剩余分数
@@ -97,7 +100,7 @@ type UserScoreChangeRecord struct {
 	// 剩余保险柜分数
 	LeftSafeBoxCount int64 `bson:"leftSafeBoxCount" json:"leftSafeBoxCount"`
 	// 改变类型
-	ChangeType int `bson:"changeType" json:"changeType"`
+	ChangeType enums.ScoreChangeType `bson:"changeType" json:"changeType"`
 	// 描述
 	Describe   string `bson:"describe" json:"describe"`
 	CreateTime int64  `bson:"createTime" json:"createTime"`

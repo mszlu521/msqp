@@ -1,25 +1,21 @@
 package proto
 
-import "core/models/entity"
-
-type RoomCreator struct {
-	Uid         string      `json:"uid"`
-	UnionID     int64       `json:"unionID"`
-	CreatorType CreatorType `json:"creatorType"`
-}
-
-type CreatorType int
-
-const (
-	UserCreatorType  CreatorType = 1
-	UnionCreatorType             = 2
+import (
+	"core/models/entity"
+	"core/models/enums"
 )
 
+type RoomCreator struct {
+	Uid         string            `json:"uid"`
+	UnionID     int64             `json:"unionID"`
+	CreatorType enums.CreatorType `json:"creatorType"`
+}
+
 type RoomUser struct {
-	UserInfo   *UserInfo  `json:"userInfo"`
-	ChairID    int        `json:"chairID"`
-	UserStatus UserStatus `json:"userStatus"`
-	WinScore   int        `json:"winScore"`
+	UserInfo   *UserInfo        `json:"userInfo"`
+	ChairID    int              `json:"chairID"`
+	UserStatus enums.UserStatus `json:"userStatus"`
+	WinScore   int              `json:"winScore"`
 }
 type UserInfo struct {
 	Uid          string `json:"uid"`
@@ -36,26 +32,14 @@ type UserInfo struct {
 	ProhibitGame bool   `json:"prohibitGame"`
 	RoomID       string `json:"roomID"`
 }
-
-type UserStatus int
-
-const (
-	None    UserStatus = 0
-	Ready              = 1
-	Playing            = 2
-	Offline            = 4
-	Dismiss            = 8
-)
-
-// 房间解散原因
-type RoomDismissReason int
-
-const (
-	DismissNone       RoomDismissReason = 0 //未知原因
-	BureauFinished                      = 1 //完成所有局
-	UserDismiss                         = 2 //用户解散
-	UnionOwnerDismiss                   = 3 //盟主解散
-)
+type UserRoomData struct {
+	Uid        string `json:"uid"`
+	Nickname   string `json:"nickname"`
+	Avatar     string `json:"avatar"`
+	Score      int    `json:"score"`
+	SpreaderID string `json:"spreaderID"`
+	WinScore   int    `json:"winScore"`
+}
 
 func ToRoomUser(data *entity.User, chairID int, connectorId string) *RoomUser {
 	userInfo := UserInfo{
@@ -70,7 +54,7 @@ func ToRoomUser(data *entity.User, chairID int, connectorId string) *RoomUser {
 	return &RoomUser{
 		UserInfo:   &userInfo,
 		ChairID:    chairID,
-		UserStatus: None,
+		UserStatus: enums.UserStatusNone,
 	}
 }
 
