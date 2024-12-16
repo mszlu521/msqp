@@ -42,7 +42,7 @@ type Room struct {
 	users                 map[string]*proto.RoomUser
 	RoomCreator           *proto.RoomCreator
 	GameFrame             GameFrame
-	kickSchedules         map[string]*time.Timer
+	kickSchedules         map[string]*tasks.TaskScheduler
 	startSchedulerID      *tasks.Task
 	answerExitSchedule    *tasks.Task
 	stopAnswerSchedules   chan struct{}
@@ -117,7 +117,9 @@ func (r *Room) ConcludeGame(data []*proto.EndData, session *remote.Session) {
 	// 收取每小局分数
 	r.recordOneDrawResult(data, session)
 	// 判断房间是否应该解散
+	logs.Info("ConcludeGame curBureau: %d, maxBureau: %d", r.curBureau, r.maxBureau)
 	if r.maxBureau > 0 && r.curBureau >= r.maxBureau {
+		logs.Info("r.gameRule.GameType :%d", r.gameRule.GameType)
 		if r.gameRule.GameType != enums.DGN {
 			r.dismissRoom(session, enums.BureauFinished)
 		}
@@ -177,7 +179,7 @@ func (r *Room) UserEntryRoom(
 	curUid := session.GetUid()
 	_, ok1 := r.kickSchedules[curUid]
 	if ok1 {
-		r.kickSchedules[curUid].Stop()
+		r.kickSchedules[curUid].StopTask()
 		delete(r.kickSchedules, curUid)
 	}
 	//最多6人参加 0-5有6个号
@@ -303,52 +305,62 @@ func (r *Room) getRoomSceneInfoPush(session *remote.Session) {
 }
 
 func (r *Room) addKickScheduleEvent(session *remote.Session, roomUser *proto.RoomUser) {
-	r.Lock()
-	defer r.Unlock()
+	if r.TryLock() {
+		defer r.Unlock()
+	}
+	if r.hasStartedOneBureau {
+		return
+	}
 	t, ok := r.kickSchedules[roomUser.UserInfo.Uid]
 	if ok {
-		t.Stop()
+		t.StopTask()
 		delete(r.kickSchedules, roomUser.UserInfo.Uid)
 	}
-	r.kickSchedules[roomUser.UserInfo.Uid] = time.AfterFunc(30*time.Second, func() {
+	r.kickSchedules[roomUser.UserInfo.Uid] = tasks.NewTaskScheduler()
+	r.kickSchedules[roomUser.UserInfo.Uid].StartTask(30*time.Second, func() {
 		logs.Info("kick 定时执行，代表 用户长时间未准备,uid=%v", roomUser.UserInfo.Uid)
-		//取消定时任务
-		timer, ok1 := r.kickSchedules[roomUser.UserInfo.Uid]
-		if ok1 {
-			timer.Stop()
-			delete(r.kickSchedules, roomUser.UserInfo.Uid)
-		}
 		//需要判断用户是否该踢出
-		user, ok2 := r.users[roomUser.UserInfo.Uid]
-		if ok2 {
-			if user.UserStatus < enums.Ready {
-				r.kickUser(user, session)
-				//踢出房间之后，需要判断是否可以解散房间
-				if len(r.users) == 0 {
-					r.dismissRoom(session, 0)
-				}
+		if !r.hasStartedOneBureau && roomUser != nil && roomUser.UserStatus&enums.Ready == 0 {
+			r.kickUser(roomUser, session)
+			if r.efficacyStartRoom() {
+				r.startGame(session, roomUser)
+			}
+			//踢出房间之后，需要判断是否可以解散房间
+			if r.efficacyDismissRoom() {
+				r.dismissRoom(session, enums.DismissNone)
 			}
 		}
+		_, ok1 := r.kickSchedules[roomUser.UserInfo.Uid]
+		if ok1 {
+			//执行过后 直接删除即可
+			delete(r.kickSchedules, roomUser.UserInfo.Uid)
+		}
 	})
+	go r.kickSchedules[roomUser.UserInfo.Uid].Wait()
 }
 
 func (r *Room) kickUser(user *proto.RoomUser, session *remote.Session) {
-	r.Lock()
-	defer r.Unlock()
+	if r.TryLock() {
+		defer r.Unlock()
+	}
 	if r.gameStarted {
 		r.GameFrame.OnEventUserOffLine(user, session)
 	}
 	r.userLeaveRoomNotify([]*proto.RoomUser{user}, session)
 	//通知其他人用户离开房间
-	r.sendData(proto.OtherUserEntryRoomPushData(user), session.GetMsg())
+	r.sendData(proto.UserLeaveRoomPushData(user), session.GetMsg())
 	delete(r.users, user.UserInfo.Uid)
 	r.currentUserCount--
 	//关于此用户的定时器停止
+	t, ok := r.kickSchedules[user.UserInfo.Uid]
+	if ok {
+		t.StopTask()
+		delete(r.kickSchedules, user.UserInfo.Uid)
+	}
 }
 
 func (r *Room) dismissRoom(session *remote.Session, reason enums.RoomDismissReason) {
 	if r.TryLock() {
-		r.Lock()
 		defer r.Unlock()
 	}
 	if r.roomDismissed {
@@ -388,13 +400,19 @@ func (r *Room) dismissRoom(session *remote.Session, reason enums.RoomDismissReas
 }
 
 func (r *Room) cancelAllScheduler() {
+	if r.answerExitSchedule != nil {
+		r.answerExitSchedule.Stop()
+		r.answerExitSchedule = nil
+	}
 	if r.startSchedulerID != nil {
 		r.startSchedulerID.Stop()
 		r.startSchedulerID = nil
 	}
 	//需要将房间所有的任务 都取消掉
 	for uid, v := range r.kickSchedules {
-		v.Stop() //阻塞
+		logs.Info("cancelAllScheduler,uid=%v", uid)
+		v.StopTask() //阻塞
+		logs.Info("cancelAllScheduler,uid=%v,timer=%v", uid, v)
 		delete(r.kickSchedules, uid)
 	}
 }
@@ -494,8 +512,9 @@ func (r *Room) AllUsers() []string {
 }
 
 func (r *Room) getEmptyChairID(uid string, isWatch bool) int {
-	r.Lock()
-	defer r.Unlock()
+	if r.TryLock() {
+		defer r.Unlock()
+	}
 	user, ok := r.users[uid]
 	if ok {
 		return user.ChairID
@@ -544,7 +563,7 @@ func (r *Room) startGame(session *remote.Session, user *proto.RoomUser) {
 		r.startSchedulerID = nil
 	}
 	for k, v := range r.kickSchedules {
-		v.Stop()
+		v.StopTask()
 		delete(r.kickSchedules, k)
 	}
 	if r.maxBureau > 0 {
@@ -568,10 +587,11 @@ func NewRoom(uid string, roomId string, unionID int64, rule proto.GameRule, u ba
 		unionID:              unionID,
 		gameRule:             rule,
 		users:                make(map[string]*proto.RoomUser),
-		kickSchedules:        make(map[string]*time.Timer),
+		kickSchedules:        make(map[string]*tasks.TaskScheduler),
 		union:                u,
 		roomType:             TypeRoomNone,
 		chairCount:           rule.MaxPlayerCount,
+		maxBureau:            utils.Default(rule.Bureau, 8),
 		stopAnswerSchedules:  make(chan struct{}, 1),
 		stopStartSchedulerID: make(chan struct{}, 1),
 	}
@@ -614,8 +634,9 @@ func (r *Room) GameMessageHandle(session *remote.Session, msg []byte) {
 }
 
 func (r *Room) askForDismiss(session *remote.Session, uid string, exist any) {
-	r.Lock()
-	defer r.Unlock()
+	if r.TryLock() {
+		defer r.Unlock()
+	}
 	askUser := r.users[uid]
 	if askUser.UserStatus&enums.Dismiss == 0 || askUser.ChairID >= r.chairCount {
 		r.userLeaveRoomRequest(session)
@@ -717,6 +738,7 @@ func (r *Room) userLeaveRoomRequest(session *remote.Session) {
 		if r.gameStarted &&
 			(user.UserStatus&enums.Playing != 0 && !r.GameFrame.IsUserEnableLeave(user.ChairID)) {
 			r.sendPopDialogContent(biz.CanNotLeaveRoom, []string{user.UserInfo.Uid}, session)
+			logs.Info("111用户 %s 离开房间 %s", user.UserInfo.Uid, r.Id)
 			r.sendData(proto.UserLeaveRoomResponsePushData(user.ChairID), session.GetMsg())
 		} else {
 			r.userLeaveRoom(session)

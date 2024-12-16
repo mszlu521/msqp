@@ -9,18 +9,25 @@ import (
 var task *Task
 
 func TestNewTask(t *testing.T) {
-	task = NewTask("test", time.Second, func() {
-		fmt.Println("执行任务")
-		stopTask()
-	})
-	fmt.Println("开始执行任务")
-	time.Sleep(5 * time.Second)
 }
 
-func stopTask() {
-	if task != nil {
-		task.Stop()
-		task = nil
+func TestNewTaskScheduler(t *testing.T) {
+	// 创建一个 TaskScheduler
+	scheduler := NewTaskScheduler()
+
+	// 定义要执行的任务
+	task1 := func() {
+		fmt.Println("Task is executing...")
 	}
-	fmt.Println("任务结束")
+	// 启动任务，设置等待 5 秒后执行
+	scheduler.StartTask(5*time.Second, task1)
+	// 模拟在 3 秒后停止任务
+	time.Sleep(3 * time.Second)
+	scheduler.StopTask()
+	// 等待任务完成
+	go scheduler.Wait()
+	// 退出
+	fmt.Println("Program finished.")
+
+	time.Sleep(10 * time.Second)
 }

@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"strings"
 )
@@ -121,10 +120,6 @@ func MessageEncode(m *Message) ([]byte, error) {
 	if m.Data != nil {
 		buf = append(buf, m.Data...)
 	}
-	fmt.Println("------------------start--------------------")
-	logs.Info("msgType:%v,stream.Router:%s,stream data: %v", m.Type, m.Route, string(m.Data))
-	logs.Info("%v", buf)
-	fmt.Println("------------------end--------------------")
 	return buf, nil
 }
 
