@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"errors"
 	"math/rand"
 	"time"
 )
@@ -66,4 +67,19 @@ func Pop[T int | string](slice []T) T {
 	lastElement := slice[len(slice)-1]
 	slice = slice[:len(slice)-1]
 	return lastElement
+}
+
+// Shift 函数移除切片中的第一个元素并返回它，返回更新后的切片
+func Shift[T int | string | int32](slice []T) (T, []T, error) {
+	// 检查切片是否为空
+	if len(slice) == 0 {
+		var zeroValue T
+		return zeroValue, slice, errors.New("slice is empty")
+	}
+	// 获取第一个元素
+	shiftedElement := slice[0]
+	// 返回去掉第一个元素后的切片
+	remainingSlice := slice[1:]
+
+	return shiftedElement, remainingSlice, nil
 }

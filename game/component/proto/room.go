@@ -5,6 +5,14 @@ import (
 	"core/models/enums"
 )
 
+type RoomInfo struct {
+	RoomID          string          `json:"roomID"`
+	GameRule        GameRule        `json:"gameRule"`
+	GameStarted     bool            `json:"gameStarted"`
+	CurBureau       int             `json:"curBureau"`
+	RoomUserInfoArr []*UserRoomData `json:"roomUserInfoArr"`
+}
+
 type RoomCreator struct {
 	Uid         string            `json:"uid"`
 	UnionID     int64             `json:"unionID"`
@@ -57,7 +65,20 @@ func ToRoomUser(data *entity.User, chairID int, connectorId string) *RoomUser {
 		UserStatus: enums.UserStatusNone,
 	}
 }
-
+func BuildGameRoomUserInfo(data *entity.User, connectorId string) *UserInfo {
+	userInfo := &UserInfo{
+		Uid:         data.Uid,
+		Nickname:    data.Nickname,
+		Avatar:      data.Avatar,
+		Gold:        data.Gold,
+		Sex:         data.Sex,
+		Address:     data.Address,
+		FrontendId:  connectorId,
+		Location:    data.Location,
+		LastLoginIP: data.LastLoginIp,
+	}
+	return userInfo
+}
 func BuildGameRoomUserInfoWithUnion(data *entity.User, unionID int64, connectorId string) *UserInfo {
 	userInfo := &UserInfo{
 		Uid:         data.Uid,

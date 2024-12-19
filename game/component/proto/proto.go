@@ -6,6 +6,8 @@ import (
 )
 
 type GameRule struct {
+	Id                string         `json:"id"`
+	RuleName          string         `json:"ruleName"`
 	AddScores         []int          `json:"addScores"`      //加注分
 	BaseScore         int            `json:"baseScore"`      //底分 sz hz
 	Bureau            int            `json:"bureau"`         //局数 sz hz

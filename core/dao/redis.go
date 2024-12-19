@@ -13,6 +13,10 @@ const Prefix = "MSQP"
 const AccountIdRedisKey = "AccountId"
 const AccountIdBegin = 10000
 const Register = "msqp_register_"
+const UnionIdRedisKey = "UnionId"
+const UnionIdBegin = 10000000
+const InviteIdRedisKey = "InviteId"
+const InviteIdBegin = 10000000
 
 type RedisDao struct {
 	repo *repo.Manager
@@ -96,6 +100,54 @@ func (d *RedisDao) Delete(ctx context.Context, key string) error {
 	return d.repo.Redis.Cli.Del(ctx, key).Err()
 }
 
+func (d *RedisDao) incrId(key string, begin int64) (int64, error) {
+	//判断此key是否存在 不存在 set 存在就自增
+	todo := context.TODO()
+	var exist int64
+	var err error
+	//0 代表不存在
+	if d.repo.Redis.Cli != nil {
+		exist, err = d.repo.Redis.Cli.Exists(todo, key).Result()
+	} else {
+		exist, err = d.repo.Redis.ClusterCli.Exists(todo, key).Result()
+	}
+	if exist == 0 {
+		//不存在
+		if d.repo.Redis.Cli != nil {
+			err = d.repo.Redis.Cli.Set(todo, key, begin, 0).Err()
+		} else {
+			err = d.repo.Redis.ClusterCli.Set(todo, key, begin, 0).Err()
+		}
+		if err != nil {
+			return -1, err
+		}
+	}
+	var id int64
+	if d.repo.Redis.Cli != nil {
+		id, err = d.repo.Redis.Cli.Incr(todo, key).Result()
+	} else {
+		id, err = d.repo.Redis.ClusterCli.Incr(todo, key).Result()
+	}
+	if err != nil {
+		return -1, err
+	}
+	return id, nil
+}
+
+func (d *RedisDao) NextUnionId() (int64, error) {
+	id, err := d.incrId(Prefix+":"+UnionIdRedisKey, UnionIdBegin)
+	if err != nil {
+		return -1, err
+	}
+	return id, nil
+}
+func (d *RedisDao) NextInviteId() (int64, error) {
+	id, err := d.incrId(Prefix+":"+InviteIdRedisKey, InviteIdBegin)
+	if err != nil {
+		return -1, err
+	}
+	return id, nil
+}
 func NewRedisDao(m *repo.Manager) *RedisDao {
 	return &RedisDao{
 		repo: m,

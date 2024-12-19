@@ -11,3 +11,15 @@ type CreateRoomReq struct {
 type JoinRoomReq struct {
 	RoomID string `json:"roomID"`
 }
+
+type GetUnionReq struct {
+	UnionID int64 `json:"unionID"`
+}
+type QuickJoinReq struct {
+	UnionID    int64  `json:"unionID"`
+	GameRuleID string `json:"gameRuleID"`
+}
+
+type HoneBaoReq struct {
+	UnionID int64 `json:"unionID"`
+}

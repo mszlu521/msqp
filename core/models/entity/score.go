@@ -15,7 +15,7 @@ type ScoreModifyRecord struct {
 	// 被改分者昵称
 	GainNickname string `bson:"gainNickname" json:"gainNickname"`
 	// 联盟ID
-	UnionID string `bson:"unionID" json:"unionID"`
+	UnionID int64 `bson:"unionID" json:"unionID"`
 	// 数量
 	Count      int32 `bson:"count" json:"count"`
 	CreateTime int64 `bson:"createTime" json:"createTime"`

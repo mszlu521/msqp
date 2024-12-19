@@ -3,7 +3,8 @@ package entity
 import "go.mongodb.org/mongo-driver/bson/primitive"
 
 type Union struct {
-	Id primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	Id      primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	UnionID int64              `bson:"unionID" json:"unionID"`
 	//盟主Uid
 	OwnerUid string `bson:"ownerUid" json:"ownerUid"`
 	// 盟主昵称
@@ -17,7 +18,7 @@ type Union struct {
 	// 在线成员数量
 	OnlineMember int32 `bson:"onlineMember" json:"onlineMember"`
 	//房间规则
-	RoomRuleList []RoomRule `bson:"roomRuleList" json:"roomRuleList"`
+	RoomRuleList []*RoomRule `bson:"roomRuleList" json:"roomRuleList"`
 	// 是否允许创建房间
 	AllowCreateRoom bool `bson:"allowCreateRoom" json:"allowCreateRoom"`
 	// 最大房间数量
@@ -41,16 +42,26 @@ type Union struct {
 	// 是否禁止邀请
 	ForbidInvite bool `bson:"forbidInvite" json:"forbidInvite"`
 	// 是否禁止赠送分数
-	ForbidGive  bool        `bson:"forbidGive" json:"forbidGive"`
-	HongBaoInfo HongBaoInfo `bson:"hongBaoInfo" json:"hongBaoInfo"`
+	ForbidGive  bool         `bson:"forbidGive" json:"forbidGive"`
+	HongBaoInfo *HongBaoInfo `bson:"hongBaoInfo" json:"hongBaoInfo"`
 	// 红包金额列表
-	HongBaoScoreList  []int32           `bson:"hongBaoScoreList" json:"hongBaoScoreList"`
-	ResultLotteryInfo ResultLotteryInfo `bson:"resultLotteryInfo" json:"resultLotteryInfo"`
+	HongBaoScoreList  []int32            `bson:"hongBaoScoreList" json:"hongBaoScoreList"`
+	ResultLotteryInfo *ResultLotteryInfo `bson:"resultLotteryInfo" json:"resultLotteryInfo"`
 	// 红包领取用户列表
 	HongBaoUidList []string `bson:"hongBaoUidList" json:"hongBaoUidList"`
 	// 创建时间
 	CreateTime int64 `bson:"createTime" json:"createTime"`
 }
+
+type StatisticsResult struct {
+	ID                          interface{} `bson:"_id"`
+	YesterdayTotalDraw          int64       `bson:"yesterdayTotalDraw"`
+	YesterdayTotalProvideRebate int64       `bson:"yesterdayTotalProvideRebate"`
+	TotalCount                  int64       `bson:"totalCount"`
+	Score                       int64       `bson:"score"`
+	SafeScore                   int64       `bson:"safeScore"`
+}
+
 type ResultLotteryInfo struct {
 	// 活动开启状态
 	Status bool `json:"status"`
@@ -84,10 +95,11 @@ type JoinRequest struct {
 }
 
 type RoomRule struct {
+	Id primitive.ObjectID `bson:"_id,omitempty" json:"_id,omitempty"`
 	// 游戏类型
-	GameType int `json:"gameType"`
+	GameType int `bson:"gameType" json:"gameType"`
 	// 房间名字
-	RuleName string `json:"ruleName"`
+	RuleName string `bson:"ruleName" json:"ruleName"`
 	// 游戏规则
-	GameRule string `json:"gameRule"`
+	GameRule string `bson:"gameRule" json:"gameRule"`
 }

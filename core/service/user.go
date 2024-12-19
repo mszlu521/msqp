@@ -12,6 +12,9 @@ import (
 	"fmt"
 	"framework/game"
 	"framework/msError"
+	"framework/pusher"
+	"framework/remote"
+	"framework/stream"
 	"go.mongodb.org/mongo-driver/bson"
 	hall "hall/models/request"
 	"time"
@@ -171,6 +174,20 @@ func (s *UserService) SaveUserScoreChangeRecordList(arr []*entity.UserScoreChang
 
 func (s *UserService) SaveUserRebateRecord(data *entity.UserRebateRecord) error {
 	return s.recordDao.CreateUserRebateRecord(context.TODO(), data)
+}
+
+func (s *UserService) SaveUserScoreChangeRecord(record *entity.UserScoreChangeRecord) error {
+	return s.recordDao.CreateUserScoreChangeRecord(context.Background(), record)
+}
+
+func (s *UserService) UpdateUserDataNotify(uid string, frontendId string, data map[string]any, session *remote.Session) {
+	if frontendId != "" {
+		data["pushRouter"] = "UpdateUserInfoPush"
+		msg := session.GetMsg()
+		pusher.GetPusher().Push(msg, []stream.PushUser{
+			{Uid: uid, ConnectorId: frontendId},
+		}, data, "ServerMessagePush")
+	}
 }
 func NewUserService(r *repo.Manager) *UserService {
 	return &UserService{

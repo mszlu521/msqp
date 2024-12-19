@@ -38,7 +38,7 @@ type Room struct {
 	sync.RWMutex
 	Id                    string
 	unionID               int64
-	gameRule              proto.GameRule
+	GameRule              proto.GameRule
 	users                 map[string]*proto.RoomUser
 	RoomCreator           *proto.RoomCreator
 	GameFrame             GameFrame
@@ -66,6 +66,7 @@ type Room struct {
 	RedisService          *service.RedisService
 	dismissTick           int
 	stopStartSchedulerID  chan struct{}
+	resultLotteryInfo     *entity.ResultLotteryInfo
 }
 
 func (r *Room) GetMaxBureau() int {
@@ -119,9 +120,9 @@ func (r *Room) ConcludeGame(data []*proto.EndData, session *remote.Session) {
 	// 判断房间是否应该解散
 	logs.Info("ConcludeGame curBureau: %d, maxBureau: %d", r.curBureau, r.maxBureau)
 	if r.maxBureau > 0 && r.curBureau >= r.maxBureau {
-		logs.Info("r.gameRule.GameType :%d", r.gameRule.GameType)
-		if r.gameRule.GameType != enums.DGN {
-			r.dismissRoom(session, enums.BureauFinished)
+		logs.Info("r.GameRule.GameType :%d", r.GameRule.GameType)
+		if r.GameRule.GameType != enums.DGN {
+			r.DismissRoom(session, enums.BureauFinished)
 		}
 	} else {
 		// 移除不满足条件的玩家
@@ -137,14 +138,14 @@ func (r *Room) resetRoom(session *remote.Session) error {
 	r.gameStarted = false
 	r.hasFinishedOneBureau = false
 	r.hasStartedOneBureau = false
-	r.maxBureau = utils.Default(r.gameRule.Bureau, 8)
+	r.maxBureau = utils.Default(r.GameRule.Bureau, 8)
 	r.curBureau = 0
 	for _, v := range r.users {
 		v.WinScore = 0
 	}
 	r.clearUserArr = make(map[string]*proto.UserRoomData)
 	var err error
-	r.GameFrame, err = NewGameFrame(r.gameRule, r, nil)
+	r.GameFrame, err = NewGameFrame(r.GameRule, r, nil)
 	if err != nil {
 		return err
 	}
@@ -173,7 +174,7 @@ func (r *Room) UserEntryRoom(
 	}
 	user, ok := r.users[data.Uid]
 	//检查是否允许新用户进入
-	if !ok && !r.canEnter() {
+	if !ok && !r.CanEnter() {
 		return biz.RoomPlayerCountFull
 	}
 	curUid := session.GetUid()
@@ -254,7 +255,7 @@ func (r *Room) UpdateUserInfoRoomPush(session *remote.Session, uid string) error
 func (r *Room) SelfEntryRoomPush(session *remote.Session, uid string) {
 	//{gameType: 1, pushRouter: 'SelfEntryRoomPush'}
 	pushMsg := map[string]any{
-		"gameType":   r.gameRule.GameType,
+		"gameType":   r.GameRule.GameType,
 		"pushRouter": "SelfEntryRoomPush",
 	}
 	r.SendData(session.GetMsg(), []string{uid}, pushMsg)
@@ -293,7 +294,7 @@ func (r *Room) getRoomSceneInfoPush(session *remote.Session) {
 		"data": map[string]any{
 			"roomID":          r.Id,
 			"roomCreatorInfo": r.RoomCreator,
-			"gameRule":        r.gameRule,
+			"gameRule":        r.GameRule,
 			"roomUserInfoArr": userInfoArr,
 			"gameData":        r.GameFrame.GetEnterGameData(session),
 		},
@@ -327,7 +328,7 @@ func (r *Room) addKickScheduleEvent(session *remote.Session, roomUser *proto.Roo
 			}
 			//踢出房间之后，需要判断是否可以解散房间
 			if r.efficacyDismissRoom() {
-				r.dismissRoom(session, enums.DismissNone)
+				r.DismissRoom(session, enums.DismissNone)
 			}
 		}
 		_, ok1 := r.kickSchedules[roomUser.UserInfo.Uid]
@@ -359,7 +360,7 @@ func (r *Room) kickUser(user *proto.RoomUser, session *remote.Session) {
 	}
 }
 
-func (r *Room) dismissRoom(session *remote.Session, reason enums.RoomDismissReason) {
+func (r *Room) DismissRoom(session *remote.Session, reason enums.RoomDismissReason) {
 	if r.TryLock() {
 		defer r.Unlock()
 	}
@@ -381,14 +382,14 @@ func (r *Room) dismissRoom(session *remote.Session, reason enums.RoomDismissReas
 			users = append(users, v)
 		}
 		r.userLeaveRoomNotify(users, session)
-		r.union.DismissRoom(r.Id)
+		r.union.DestroyRoom(r.Id)
 		r.destroyRoom(reason, session)
 		r.sendData(proto.RoomDismissPushData(reason), session.GetMsg())
 	} else {
 		// 清除掉线玩家
 		r.clearOfflineUser(session)
 		if r.currentUserCount == 0 {
-			r.union.DismissRoom(r.Id)
+			r.union.DestroyRoom(r.Id)
 			r.destroyRoom(reason, session)
 			return
 		}
@@ -427,7 +428,7 @@ func (r *Room) userReady(uid string, session *remote.Session) {
 		return
 	}
 	//首局判断玩家积分，如果积分不够则直接踢出游戏
-	if r.hasStartedOneBureau && user.UserInfo.Score < r.gameRule.ScoreLowLimit {
+	if r.hasStartedOneBureau && user.UserInfo.Score < r.GameRule.ScoreLowLimit {
 		r.sendPopDialogContent(biz.LeaveRoomGoldExceedLimit, []string{user.UserInfo.Uid}, session)
 		r.kickUser(user, session)
 		return
@@ -543,12 +544,12 @@ func (r *Room) IsStartGame() bool {
 			userReadyCount++
 		}
 	}
-	if r.gameRule.GameType == enums.ZNMJ {
-		if len(r.users) == userReadyCount && userReadyCount >= r.gameRule.MaxPlayerCount {
+	if r.GameRule.GameType == enums.ZNMJ {
+		if len(r.users) == userReadyCount && userReadyCount >= r.GameRule.MaxPlayerCount {
 			return true
 		}
 	}
-	if len(r.users) == userReadyCount && userReadyCount >= r.gameRule.MinPlayerCount {
+	if len(r.users) == userReadyCount && userReadyCount >= r.GameRule.MinPlayerCount {
 		return true
 	}
 	return false
@@ -581,11 +582,11 @@ func (r *Room) startGame(session *remote.Session, user *proto.RoomUser) {
 	r.GameFrame.OnEventGameStart(user, session)
 }
 
-func NewRoom(uid string, roomId string, unionID int64, rule proto.GameRule, u base.UnionBase, session *remote.Session) (*Room, error) {
+func NewRoom(roomId string, creatorInfo *proto.RoomCreator, rule proto.GameRule, u base.UnionBase, session *remote.Session) (*Room, error) {
 	r := &Room{
 		Id:                   roomId,
-		unionID:              unionID,
-		gameRule:             rule,
+		unionID:              creatorInfo.UnionID,
+		GameRule:             rule,
 		users:                make(map[string]*proto.RoomUser),
 		kickSchedules:        make(map[string]*tasks.TaskScheduler),
 		union:                u,
@@ -595,20 +596,7 @@ func NewRoom(uid string, roomId string, unionID int64, rule proto.GameRule, u ba
 		stopAnswerSchedules:  make(chan struct{}, 1),
 		stopStartSchedulerID: make(chan struct{}, 1),
 	}
-	if unionID == 1 {
-		//普通房间
-		r.RoomCreator = &proto.RoomCreator{
-			CreatorType: enums.UserCreatorType,
-			Uid:         uid,
-			UnionID:     unionID,
-		}
-	} else {
-		r.RoomCreator = &proto.RoomCreator{
-			CreatorType: enums.UnionCreatorType,
-			Uid:         uid,
-			UnionID:     unionID,
-		}
-	}
+	r.RoomCreator = creatorInfo
 	var err error
 	r.GameFrame, err = NewGameFrame(rule, r, session)
 	if err != nil {
@@ -718,7 +706,7 @@ func (r *Room) askForDismiss(session *remote.Session, uid string, exist any) {
 				r.answerExitSchedule.Stop()
 				r.answerExitSchedule = nil
 			}
-			r.dismissRoom(session, enums.UserDismiss)
+			r.DismissRoom(session, enums.UserDismiss)
 		}
 	}
 }
@@ -768,7 +756,7 @@ func (r *Room) userChangeSeat(session *remote.Session, fromChairID int, toChairI
 		return
 	}
 	//判断用户是否有足够的积分
-	if toChairID < r.chairCount && user.UserInfo.Score < r.gameRule.ScoreLowLimit {
+	if toChairID < r.chairCount && user.UserInfo.Score < r.GameRule.ScoreLowLimit {
 		return
 	}
 	user.ChairID = toChairID
@@ -814,7 +802,7 @@ func (r *Room) userLeaveRoom(session *remote.Session) {
 	}
 	//判断房间是否需要解散
 	if r.efficacyDismissRoom() {
-		r.dismissRoom(session, enums.DismissNone)
+		r.DismissRoom(session, enums.DismissNone)
 	}
 }
 
@@ -867,7 +855,7 @@ func (r *Room) efficacyStartRoom() bool {
 			}
 		}
 	}
-	return (userCount == readyCount && userCount >= r.gameRule.MinPlayerCount) || readyCount == r.gameRule.MaxPlayerCount
+	return (userCount == readyCount && userCount >= r.GameRule.MinPlayerCount) || readyCount == r.GameRule.MaxPlayerCount
 }
 
 func (r *Room) isShouldSchedulerStart() bool {
@@ -888,7 +876,7 @@ func (r *Room) isShouldSchedulerStart() bool {
 			}
 		}
 	}
-	return readyCount >= 4 && readyCount >= r.gameRule.MinPlayerCount
+	return readyCount >= 4 && readyCount >= r.GameRule.MinPlayerCount
 }
 
 // 正在解散中
@@ -899,17 +887,17 @@ func (r *Room) isDismissing() bool {
 	return len(r.askDismiss) > 0
 }
 
-func (r *Room) canEnter() bool {
-	hasEmpty := r.hasEmptyChair()
-	canWatch := r.gameRule.CanWatch
-	canEnter := r.gameRule.CanEnter && (r.gameRule.GameType != enums.PDK)
+func (r *Room) CanEnter() bool {
+	hasEmpty := r.HasEmptyChair()
+	canWatch := r.GameRule.CanWatch
+	canEnter := r.GameRule.CanEnter && (r.GameRule.GameType != enums.PDK)
 	if r.hasStartedOneBureau {
 		return canEnter && (hasEmpty || (canWatch && r.currentUserCount < 20))
 	}
 	return hasEmpty || (canWatch && r.currentUserCount < 20)
 }
 
-func (r *Room) hasEmptyChair() bool {
+func (r *Room) HasEmptyChair() bool {
 	seatCount := 0
 	for _, v := range r.users {
 		if v.ChairID == -1 {
@@ -923,15 +911,15 @@ func (r *Room) hasEmptyChair() bool {
 func (r *Room) checkEntryRoom(userInfo *proto.UserInfo) *msError.Error {
 	if r.RoomCreator.CreatorType == enums.UserCreatorType {
 		//普通房间
-		if r.gameRule.PayType == proto.MyPay {
+		if r.GameRule.PayType == proto.MyPay {
 			//检查钻石是否足够
 			if userInfo.Uid == r.RoomCreator.Uid {
-				if userInfo.Gold < int64(r.gameRule.PayDiamond) {
+				if userInfo.Gold < int64(r.GameRule.PayDiamond) {
 					return biz.NotEnoughGold
 				}
 			}
 		} else {
-			if userInfo.Gold < int64(r.gameRule.PayDiamond) {
+			if userInfo.Gold < int64(r.GameRule.PayDiamond) {
 				return biz.NotEnoughGold
 			}
 		}
@@ -1072,7 +1060,7 @@ func (r *Room) calculateRebateWhenStart(session *remote.Session) {
 	if r.RoomCreator.CreatorType == enums.UnionCreatorType {
 		return
 	}
-	roomPayRule := r.gameRule.RoomPayRule
+	roomPayRule := r.GameRule.RoomPayRule
 	if roomPayRule.EveryFixedScore <= 0 {
 		return
 	}
@@ -1129,7 +1117,7 @@ func (r *Room) calculateRebateWhenStart(session *remote.Session) {
 			r.execRebate(
 				r.RoomCreator.UnionID,
 				r.Id,
-				r.gameRule.GameType, v.UserInfo,
+				r.GameRule.GameType, v.UserInfo,
 				nil,
 				"",
 				key,
@@ -1224,7 +1212,7 @@ func (r *Room) recordOneDrawResult(dataArr []*proto.EndData, session *remote.Ses
 	if r.RoomCreator.CreatorType != enums.UnionCreatorType {
 		return
 	}
-	if r.gameRule.RoomPayRule.RebateType != enums.One {
+	if r.GameRule.RoomPayRule.RebateType != enums.One {
 		return
 	}
 	dataList := make(map[string]*proto.UserRoomData)
@@ -1236,7 +1224,7 @@ func (r *Room) recordOneDrawResult(dataArr []*proto.EndData, session *remote.Ses
 	}
 	rebateList := r.calculateRebate(dataList)
 	avgRebateCount := 0
-	if !r.gameRule.RoomPayRule.IsAvg {
+	if !r.GameRule.RoomPayRule.IsAvg {
 		totalRebateCount := 0
 		for _, v := range rebateList {
 			totalRebateCount += v
@@ -1258,7 +1246,7 @@ func (r *Room) recordOneDrawResult(dataArr []*proto.EndData, session *remote.Ses
 			continue
 		}
 		rebateCount := avgRebateCount
-		if !r.gameRule.RoomPayRule.IsAvg {
+		if !r.GameRule.RoomPayRule.IsAvg {
 			rebateCount = rebateList[uid]
 		}
 		if rebateCount <= 0 {
@@ -1273,7 +1261,7 @@ func (r *Room) recordOneDrawResult(dataArr []*proto.EndData, session *remote.Ses
 		newUserData := r.UserService.UpdateUserData(matchData, saveData)
 		r.updateUserDataNotify(map[string]any{"unionInfo": newUserData.UnionInfo}, session)
 		r.updateRoomUserInfo(proto.BuildGameRoomUserInfoWithUnion(newUserData, r.RoomCreator.UnionID, session.GetMsg().ConnectorId), false, session)
-		r.execRebate(r.RoomCreator.UnionID, r.Id, r.gameRule.GameType, user.UserInfo, nil, "", uid, rebateCount, false, true, session)
+		r.execRebate(r.RoomCreator.UnionID, r.Id, r.GameRule.GameType, user.UserInfo, nil, "", uid, rebateCount, false, true, session)
 	}
 }
 
@@ -1287,11 +1275,11 @@ func (r *Room) clearNonSatisfiedConditionsUser(session *remote.Session) {
 		if user.ChairID >= r.chairCount {
 			continue
 		}
-		if user.UserInfo.Score < r.gameRule.ScoreDismissLimit {
-			if r.gameRule.GameType == enums.PDK || r.gameRule.GameType == enums.ZNMJ {
-				r.dismissRoom(session, enums.UserDismiss)
+		if user.UserInfo.Score < r.GameRule.ScoreDismissLimit {
+			if r.GameRule.GameType == enums.PDK || r.GameRule.GameType == enums.ZNMJ {
+				r.DismissRoom(session, enums.UserDismiss)
 			} else {
-				if r.gameRule.CanEnter && r.gameRule.CanWatch {
+				if r.GameRule.CanEnter && r.GameRule.CanWatch {
 					r.userChangeSeat(session, user.ChairID, r.getEmptyChairID("", true))
 				} else {
 					kickUidArr = append(kickUidArr, user.UserInfo.Uid)
@@ -1322,7 +1310,7 @@ func (r *Room) clearNonSatisfiedConditionsUser(session *remote.Session) {
 
 // calculateRebate 计算返利数量
 func (r *Room) calculateRebate(dataList map[string]*proto.UserRoomData) map[string]int {
-	roomPayRule := r.gameRule.RoomPayRule
+	roomPayRule := r.GameRule.RoomPayRule
 	// 大赢家支付
 	bigWinUidArr := r.getBinWinUidArr(dataList)
 
@@ -1358,7 +1346,7 @@ func (r *Room) getBinWinUidArr(dataList map[string]*proto.UserRoomData) []string
 	sort.Slice(userWinScoreArr, func(i, j int) bool {
 		return userWinScoreArr[i].WinScore > userWinScoreArr[j].WinScore
 	})
-	roomPayRule := r.gameRule.RoomPayRule
+	roomPayRule := r.GameRule.RoomPayRule
 	bigWinCount := 100
 	if roomPayRule.BigWinCount != -1 {
 		bigWinCount = roomPayRule.BigWinCount
@@ -1394,4 +1382,39 @@ func (r *Room) stopSchedule() {
 
 		}
 	}
+}
+
+func (r *Room) GetRoomInfo() *proto.RoomInfo {
+	if r.roomDismissed {
+		return nil
+	}
+	var roomUserInfoArr []*proto.UserRoomData
+	for _, v := range r.users {
+		if v.ChairID >= r.chairCount {
+			continue
+		}
+		roomUserInfoArr = append(roomUserInfoArr, &proto.UserRoomData{
+			WinScore: v.WinScore,
+			Avatar:   v.UserInfo.Avatar,
+			Nickname: v.UserInfo.Nickname,
+		})
+	}
+	return &proto.RoomInfo{
+		RoomID:          r.Id,
+		GameRule:        r.GameRule,
+		GameStarted:     r.gameStarted,
+		CurBureau:       r.curBureau,
+		RoomUserInfoArr: roomUserInfoArr,
+	}
+}
+
+func (r *Room) IsUserInRoom(uid string) bool {
+	if r.roomDismissed {
+		return false
+	}
+	return r.users[uid] != nil
+}
+
+func (r *Room) UpdateLotteryInfo(status *entity.ResultLotteryInfo) {
+	r.resultLotteryInfo = status
 }

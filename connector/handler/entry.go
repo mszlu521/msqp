@@ -45,6 +45,8 @@ func (h *EntryHandler) Entry(session *net.Session, body []byte) (any, error) {
 	if user.IsBlockedAccount {
 		return common.F(biz.BlockedAccount), nil
 	}
+	//设置用户可以创建联盟
+	user.IsAgent = true
 	return common.S(map[string]any{
 		"userInfo": user,
 		"config":   game.Conf.GetFrontGameConfig(),

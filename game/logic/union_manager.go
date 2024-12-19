@@ -24,14 +24,18 @@ func NewUnionManager() *UnionManager {
 	}
 }
 
-func (u *UnionManager) GetUnion(unionId int64) *Union {
+func (u *UnionManager) GetUnion(unionId int64,
+	redisService *service.RedisService,
+	userService *service.UserService,
+	unionService *service.UnionService) *Union {
 	u.Lock()
 	u.Unlock()
 	union, ok := u.unionList[unionId]
 	if ok {
 		return union
 	}
-	union = NewUnion(u)
+	union = NewUnion(u, unionId, unionService, redisService, userService)
+	union.init()
 	u.unionList[unionId] = union
 	return union
 }
@@ -68,15 +72,27 @@ func (u *UnionManager) GetRoomById(roomId string) *room.Room {
 	return nil
 }
 
-func (u *UnionManager) JoinRoom(redisService *service.RedisService, session *remote.Session, roomId string, data *entity.User) *msError.Error {
+func (u *UnionManager) JoinRoom(session *remote.Session, roomId string, data *entity.User) *msError.Error {
+	union := u.getUnionByRoomID(roomId)
+	if union == nil {
+		return biz.RoomNotExist
+	}
+	return union.JoinRoom(session, roomId, data)
+}
+
+func (u *UnionManager) IsUserInRoom(roomId string, uid string) bool {
+	rooms := u.GetRoomById(roomId)
+	if rooms == nil {
+		return false
+	}
+	return rooms.IsUserInRoom(uid)
+}
+
+func (u *UnionManager) getUnionByRoomID(roomId string) *Union {
 	for _, v := range u.unionList {
-		r, ok := v.RoomList[roomId]
-		if ok {
-			if r.RedisService == nil {
-				r.RedisService = redisService
-			}
-			return r.JoinRoom(session, data)
+		if v.RoomList[roomId] != nil {
+			return v
 		}
 	}
-	return biz.RoomNotExist
+	return nil
 }

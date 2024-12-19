@@ -10,7 +10,19 @@ type User struct {
 	Id  string
 	Age int
 }
+type UserTwo struct {
+	User
+	Name string
+}
 
+func TestJson(t *testing.T) {
+	two := &UserTwo{}
+	two.Id = "11"
+	two.Name = "2"
+	two.Age = 20
+	marshal, _ := json.Marshal(two)
+	fmt.Println(string(marshal))
+}
 func TestMap(t *testing.T) {
 	m := make(map[string]*User)
 	m["1"] = &User{Id: "1", Age: 1}

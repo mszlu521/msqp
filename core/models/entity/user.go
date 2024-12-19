@@ -24,6 +24,7 @@ type User struct {
 	AvatarFrame      string             `bson:"avatarFrame" json:"avatarFrame"`     // 头像框
 	Nickname         string             `bson:"nickname" json:"nickname"`           // 昵称
 	Avatar           string             `bson:"avatar" json:"avatar"`               // 头像
+	SyncLock         int                `bson:"syncLock" json:"syncLock"`
 }
 
 func (u *User) GetUnionItem(unionID int64) *UnionInfo {
@@ -45,7 +46,7 @@ type InviteMsg struct {
 
 // UnionInfo 联盟(俱乐部)信息
 type UnionInfo struct {
-	InviteId     string `bson:"inviteId" json:"inviteId"`         //我的邀请ID
+	InviteID     int64  `bson:"inviteID" json:"inviteID"`         //我的邀请ID
 	UnionID      int64  `bson:"unionID" json:"unionID"`           //联盟ID
 	Score        int    `json:"score" bson:"score"`               //积分数量
 	SafeScore    int    `json:"safeScore" bson:"safeScore"`       //保险柜积分

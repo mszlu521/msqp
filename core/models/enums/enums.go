@@ -3,14 +3,14 @@ package enums
 type ScoreChangeType int
 
 const (
-	None               ScoreChangeType = iota
+	ScoreChangeNone    ScoreChangeType = iota
 	Give                               // 被赠送积分
 	ModifyLow                          // 修改下级分数
 	ModifyUp                           // 被上级修改分数
 	GameWin                            // 游戏赢分
 	GameStartUnionChou                 // 游戏开始联盟抽分
 	GameWinChou                        // 游戏赢家抽分
-	SageBox                            // 保险柜操作
+	SafeBox                            // 保险柜操作
 )
 
 // RoomRentPayType 房间支付模式
