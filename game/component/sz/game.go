@@ -31,6 +31,15 @@ type GameFrame struct {
 	stopPourScoreScheduleID chan struct{}
 	stopForcePrepareID      chan struct{}
 }
+
+func (g *GameFrame) GetGameBureauData() any {
+	return g.ReviewRecord
+}
+
+func (g *GameFrame) GetGameVideoData() any {
+	return nil
+}
+
 type DismissResult struct {
 	Uid      string `json:"uid"`
 	Nickname string `json:"nickname"`

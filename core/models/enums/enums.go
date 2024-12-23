@@ -21,6 +21,14 @@ const (
 	AA                     = 2
 )
 
+type RoomPayType int
+
+const (
+	AAZhiFu  RoomPayType = 1
+	WinZhiFu             = 2
+	MyPay                = 3
+)
+
 type RebateType string
 
 const (

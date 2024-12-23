@@ -37,7 +37,6 @@ type Union struct {
 func (u *Union) DestroyRoom(roomId string) {
 	delete(u.RoomList, roomId)
 }
-
 func (u *Union) CreateRoom(redisService *service.RedisService, userService *service.UserService, session *remote.Session, req request.CreateRoomReq, userData *entity.User) *msError.Error {
 	newRoom, err := u.createRoom(req, userData.Uid, session)
 	if err != nil {

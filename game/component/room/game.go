@@ -18,6 +18,8 @@ type GameFrame interface {
 	OnEventUserEntry(user *proto.RoomUser, session *remote.Session)
 	OnEventGameStart(user *proto.RoomUser, session *remote.Session)
 	OnEventRoomDismiss(reason enums.RoomDismissReason, session *remote.Session)
+	GetGameVideoData() any
+	GetGameBureauData() any
 }
 
 func NewGameFrame(rule proto.GameRule, r base.RoomFrame, session *remote.Session) (GameFrame, error) {

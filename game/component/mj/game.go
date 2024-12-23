@@ -22,6 +22,36 @@ type GameFrame struct {
 	logic         *Logic
 	testCardArray []mp.CardID
 	turnSchedule  []*time.Timer
+	reviewRecord  []*ReviewRecord //牌面回顾记录
+}
+
+func (g *GameFrame) GetGameBureauData() any {
+	var gameData [][]*BureauReview
+	for _, v := range g.reviewRecord {
+		var bureauReview []*BureauReview
+		for _, user := range v.UserArray {
+			bureauReview = append(bureauReview, &BureauReview{
+				Uid:      user.Uid,
+				WinScore: user.Score,
+				Nickname: user.Nickname,
+				Avatar:   user.Avatar,
+				IsBanker: user.IsBanker,
+			})
+		}
+		gameData = append(gameData, bureauReview)
+	}
+	return gameData
+}
+
+func (g *GameFrame) GetGameVideoData() any {
+	if len(g.reviewRecord) <= 0 {
+		return nil
+	}
+	lastItem := g.reviewRecord[len(g.reviewRecord)-1]
+	if lastItem != nil && lastItem.Result == nil {
+		g.reviewRecord = g.reviewRecord[:len(g.reviewRecord)-1]
+	}
+	return g.reviewRecord
 }
 
 func (g *GameFrame) OnEventRoomDismiss(reason enums.RoomDismissReason, session *remote.Session) {
@@ -609,6 +639,7 @@ func NewGameFrame(rule proto.GameRule, r base.RoomFrame) *GameFrame {
 		logic:         NewLogic(GameType(rule.GameFrameType), rule.Qidui),
 		testCardArray: make([]mp.CardID, gameData.ChairCount),
 		turnSchedule:  make([]*time.Timer, gameData.ChairCount),
+		reviewRecord:  make([]*ReviewRecord, 0),
 	}
 }
 

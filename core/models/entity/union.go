@@ -67,9 +67,9 @@ type ResultLotteryInfo struct {
 	// 活动开启状态
 	Status bool `json:"status"`
 	// 金额
-	CountArr []int32 `json:"countArr"`
+	CountArr []int `json:"countArr"`
 	// 金额对应概率
-	RateArr []int32 `json:"rateArr"`
+	RateArr []float64 `json:"rateArr"`
 }
 type HongBaoInfo struct {
 	// 活动开启状态

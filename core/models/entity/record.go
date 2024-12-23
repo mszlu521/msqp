@@ -48,7 +48,7 @@ type RechargeRecord struct {
 type UserGameRecord struct {
 	Id            primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
 	RoomID        string             `bson:"roomID" json:"roomID"`
-	UnionID       string             `bson:"unionID" json:"unionID"`
+	UnionID       int64              `bson:"unionID" json:"unionID"`
 	CreatorUid    string             `bson:"creatorUid" json:"creatorUid"`
 	GameType      int                `bson:"gameType" json:"gameType"`
 	UserList      []*GameUser        `bson:"userList" json:"userList"`
@@ -75,6 +75,7 @@ type GameUser struct {
 	Nickname   string             `bson:"nickname" json:"nickname"`
 	Avatar     string             `bson:"avatar" json:"avatar"`
 	SpreaderID string             `bson:"spreaderID" json:"spreaderID"`
+	WinScore   int                `bson:"winScore" json:"winScore"`
 }
 
 type GameVideoRecord struct {

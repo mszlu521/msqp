@@ -3,6 +3,7 @@ package mj
 import (
 	"core/models/enums"
 	"game/component/mj/mp"
+	"game/component/proto"
 )
 
 type MessageReq struct {
@@ -53,6 +54,24 @@ type OperateRecord struct {
 	ChairID int         `json:"chairID"`
 	Card    mp.CardID   `json:"card"`
 	Operate OperateType `json:"operate"`
+}
+
+type ReviewRecord struct {
+	RoomID        string               `json:"roomID"`
+	HandCards     [][]mp.CardID        `json:"handCards"`
+	OperateRecord []OperateRecord      `json:"operateRecord"`
+	UserArray     []proto.UserRoomData `json:"userArray"`
+	CardsCount    int                  `json:"cardsCount"`
+	MaxBureau     int                  `json:"maxBureau"`
+	Qidui         bool                 `json:"qidui"`
+	Result        *GameResult          `json:"result"`
+}
+type BureauReview struct {
+	Uid      string `json:"uid"`
+	WinScore int    `json:"winScore"`
+	Nickname string `json:"nickname"`
+	Avatar   string `json:"avatar"`
+	IsBanker bool   `json:"isBanker"`
 }
 type OperateType int
 

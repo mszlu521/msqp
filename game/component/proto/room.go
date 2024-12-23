@@ -20,6 +20,7 @@ type RoomCreator struct {
 }
 
 type RoomUser struct {
+	Uid        string           `json:"uid"`
 	UserInfo   *UserInfo        `json:"userInfo"`
 	ChairID    int              `json:"chairID"`
 	UserStatus enums.UserStatus `json:"userStatus"`
@@ -47,6 +48,7 @@ type UserRoomData struct {
 	Score      int    `json:"score"`
 	SpreaderID string `json:"spreaderID"`
 	WinScore   int    `json:"winScore"`
+	IsBanker   bool   `json:"isBanker"`
 }
 
 func ToRoomUser(data *entity.User, chairID int, connectorId string) *RoomUser {
@@ -109,4 +111,17 @@ func BuildGameRoomUserInfoWithUnion(data *entity.User, unionID int64, connectorI
 		}
 	}
 	return userInfo
+}
+
+var diamondConfig = map[enums.GameType]map[int]int{
+	enums.PDK:  {10: 1, 20: 2},
+	enums.NN:   {10: 1, 20: 2, 30: 3},
+	enums.SZ:   {6: 1, 12: 2, 15: 3, 20: 4},
+	enums.SG:   {10: 1, 20: 2, 30: 3},
+	enums.ZNMJ: {8: 1, 16: 2},
+	enums.DGN:  {10: 1, 20: 2, 30: 3},
+}
+
+func OneUserDiamondCount(bureau int, gameType enums.GameType) int {
+	return diamondConfig[gameType][bureau]
 }

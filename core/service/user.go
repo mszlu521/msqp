@@ -190,6 +190,14 @@ func (s *UserService) UpdateUserDataNotify(uid string, frontendId string, data m
 		}, data, "ServerMessagePush")
 	}
 }
+
+func (s *UserService) SaveGameVideoRecord(data *entity.GameVideoRecord) {
+	s.recordDao.SaveGameVideoRecord(context.Background(), data)
+}
+
+func (s *UserService) SaveUserGameRecord(data *entity.UserGameRecord) {
+	s.recordDao.SaveUserGameRecord(context.Background(), data)
+}
 func NewUserService(r *repo.Manager) *UserService {
 	return &UserService{
 		userDao:    dao.NewUserDao(r),

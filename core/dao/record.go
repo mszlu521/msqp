@@ -105,7 +105,24 @@ func (d *RecordDao) FindUserGameRecordPage(ctx context.Context, startIndex int, 
 	defer cursor.Close(ctx)
 	var list []*entity.UserGameRecord
 	err = cursor.All(ctx, &list)
-	return list, 0, err
+	countDocuments, err := collection.CountDocuments(ctx, matchData)
+	return list, countDocuments, err
+}
+
+func (d *RecordDao) SaveGameVideoRecord(ctx context.Context, data *entity.GameVideoRecord) {
+	collection := d.repo.Mongo.Db.Collection("gameVideoRecord")
+	_, err := collection.InsertOne(ctx, data)
+	if err != nil {
+		logs.Error("SaveGameVideoRecord err:%v", err)
+	}
+}
+
+func (d *RecordDao) SaveUserGameRecord(ctx context.Context, data *entity.UserGameRecord) {
+	collection := d.repo.Mongo.Db.Collection("userGameRecord")
+	_, err := collection.InsertOne(ctx, data)
+	if err != nil {
+		logs.Error("SaveUserGameRecord err:%v", err)
+	}
 }
 
 func NewRecordDao(m *repo.Manager) *RecordDao {
