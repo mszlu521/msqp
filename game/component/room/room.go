@@ -1015,7 +1015,7 @@ func (r *Room) recordGameResult(dataArr []*proto.EndData, session *remote.Sessio
 				describe = "输分" + strconv.Itoa(-data.Score)
 			}
 			scoreChangeRecordArr = append(scoreChangeRecordArr, &entity.UserScoreChangeRecord{
-				CreateTime:       time.Now().Unix(),
+				CreateTime:       time.Now().UnixMilli(),
 				Uid:              v.Uid,
 				Nickname:         v.Nickname,
 				UnionID:          r.RoomCreator.UnionID,
@@ -1101,7 +1101,7 @@ func (r *Room) calculateRebateWhenStart(session *remote.Session) {
 			}
 		}
 		scoreChangeRecordArr = append(scoreChangeRecordArr, &entity.UserScoreChangeRecord{
-			CreateTime:       time.Now().Unix(),
+			CreateTime:       time.Now().UnixMilli(),
 			Uid:              newUserData.Uid,
 			Nickname:         newUserData.Nickname,
 			UnionID:          r.RoomCreator.UnionID,
@@ -1133,7 +1133,7 @@ func (r *Room) execRebate(unionID int64, roomId string, gameType enums.GameType,
 	if spreaderID == "" {
 		return
 	}
-	lowPartnerRebateRate := 0
+	var lowPartnerRebateRate float64
 	if lowPartnerUnionInfo != nil {
 		lowPartnerRebateRate = lowPartnerUnionInfo.RebateRate
 	}
@@ -1152,9 +1152,9 @@ func (r *Room) execRebate(unionID int64, roomId string, gameType enums.GameType,
 		return
 	}
 	// 第一步：计算初始分数
-	getScore := count * (unionInfo.RebateRate - lowPartnerRebateRate)
+	getScore := float64(count) * (unionInfo.RebateRate - lowPartnerRebateRate)
 	// 第二步：向下取整到两位小数
-	getScore = int(math.Floor(float64(getScore*100)) / 100)
+	getScore = math.Floor(getScore*100) / 100
 	if getScore <= 0 {
 		return
 	}
@@ -1183,14 +1183,14 @@ func (r *Room) execRebate(unionID int64, roomId string, gameType enums.GameType,
 		}
 		// 添加记录
 		createData := &entity.UserRebateRecord{
-			CreateTime: time.Now().Unix(),
+			CreateTime: time.Now().UnixMilli(),
 			Uid:        spreaderID,
 			RoomID:     roomId,
 			GameType:   int(gameType),
 			UnionID:    unionID,
 			PlayerUid:  userInfo.Uid,
 			TotalCount: count,
-			GainCount:  getScore,
+			GainCount:  int(getScore),
 			Start:      false,
 		}
 		_ = r.UserService.SaveUserRebateRecord(createData)

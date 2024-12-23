@@ -60,6 +60,7 @@ type StatisticsResult struct {
 	TotalCount                  int64       `bson:"totalCount"`
 	Score                       int64       `bson:"score"`
 	SafeScore                   int64       `bson:"safeScore"`
+	TotalGiveCount              int64       `bson:"totalGiveCount"`
 }
 
 type ResultLotteryInfo struct {

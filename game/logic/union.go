@@ -386,7 +386,7 @@ func (u *Union) GetLastActiveTime() time.Time {
 }
 
 func (u *Union) IsShouldDelete(t int64) bool {
-	return len(u.RoomList) == 0 && u.activeTime.Unix()-time.Now().Unix() > t
+	return len(u.RoomList) == 0 && u.activeTime.UnixMilli()-time.Now().UnixMilli() > t
 }
 
 func (u *Union) UpdateUnionNotice(notice string) {

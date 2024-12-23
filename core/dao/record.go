@@ -72,6 +72,42 @@ func (d *RecordDao) SaveScoreModifyRecord(ctx context.Context, record *entity.Sc
 	return err
 }
 
+func (d *RecordDao) FindScoreModifyRecordPage(ctx context.Context, startIndex int, count int, sortData bson.M, matchData bson.M) ([]*entity.ScoreModifyRecord, int64, error) {
+	collection := d.repo.Mongo.Db.Collection("scoreModifyRecord")
+	cursor, err := collection.Find(ctx,
+		matchData,
+		options.Find().SetSort(sortData).SetSkip(int64(startIndex)).SetLimit(int64(count)))
+	if err != nil {
+		logs.Error("FindScoreModifyRecordPage err:%v", err)
+		return nil, 0, err
+	}
+	defer cursor.Close(ctx)
+	var list []*entity.ScoreModifyRecord
+	err = cursor.All(ctx, &list)
+	return list, 0, err
+}
+
+func (d *RecordDao) SaveScoreGiveRecord(background context.Context, data *entity.ScoreGiveRecord) error {
+	collection := d.repo.Mongo.Db.Collection("scoreGiveRecord")
+	_, err := collection.InsertOne(background, data)
+	return err
+}
+
+func (d *RecordDao) FindUserGameRecordPage(ctx context.Context, startIndex int, count int, sortData bson.M, matchData bson.M) ([]*entity.UserGameRecord, int64, error) {
+	collection := d.repo.Mongo.Db.Collection("userGameRecord")
+	cursor, err := collection.Find(ctx,
+		matchData,
+		options.Find().SetSort(sortData).SetSkip(int64(startIndex)).SetLimit(int64(count)))
+	if err != nil {
+		logs.Error("FindScoreModifyRecordPage err:%v", err)
+		return nil, 0, err
+	}
+	defer cursor.Close(ctx)
+	var list []*entity.UserGameRecord
+	err = cursor.All(ctx, &list)
+	return list, 0, err
+}
+
 func NewRecordDao(m *repo.Manager) *RecordDao {
 	return &RecordDao{
 		repo: m,

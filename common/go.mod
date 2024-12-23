@@ -1,6 +1,6 @@
 module common
 
-go 1.21.0
+go 1.22.0
 
 require (
 	github.com/arl/statsviz v0.6.0

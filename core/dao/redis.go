@@ -11,7 +11,7 @@ import (
 
 const Prefix = "MSQP"
 const AccountIdRedisKey = "AccountId"
-const AccountIdBegin = 10000
+const AccountIdBegin = 100000
 const Register = "msqp_register_"
 const UnionIdRedisKey = "UnionId"
 const UnionIdBegin = 10000000

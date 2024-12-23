@@ -83,3 +83,12 @@ func Shift[T int | string | int32](slice []T) (T, []T, error) {
 
 	return shiftedElement, remainingSlice, nil
 }
+
+// GetTimeTodayStart 返回当天零点的时间戳（毫秒）
+func GetTimeTodayStart() int64 {
+	now := time.Now()
+	// 获取当天零点的时间
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	// 返回时间戳，单位为毫秒
+	return todayStart.UnixNano() / int64(time.Millisecond)
+}

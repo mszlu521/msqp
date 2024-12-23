@@ -28,7 +28,7 @@ type ScoreGiveRecord struct {
 	Nickname     string             `bson:"nickname" json:"nickname"`
 	GainUid      string             `bson:"gainUid" json:"gainUid"`
 	GainNickname string             `bson:"gainNickname" json:"gainNickname"`
-	UnionID      string             `bson:"unionID" json:"unionID"`
+	UnionID      int64              `bson:"unionID" json:"unionID"`
 	Count        int32              `bson:"count" json:"count"`
 	CreateTime   int64              `bson:"createTime" json:"createTime"`
 }

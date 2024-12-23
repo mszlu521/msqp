@@ -44,6 +44,7 @@ func (s *UserService) FindAndSaveUserByUid(ctx context.Context, uid string, info
 		user.CreateTime = time.Now().UnixMilli()
 		user.LastLoginTime = time.Now().UnixMilli()
 		user.UnionInfo = []*entity.UnionInfo{}
+		user.InviteMsg = []*entity.InviteMsg{}
 		err = s.userDao.Insert(context.TODO(), user)
 		if err != nil {
 			logs.Error("[UserService] FindAndSaveUserByUid insert user err:%v", err)
@@ -114,7 +115,7 @@ func (s *UserService) UpdateUserRealName(uid string, info string) *msError.Error
 func (s *UserService) GetUserData(phone string, uid string) (*entity.User, *msError.Error) {
 	if uid != "" {
 		//根据uid查询
-		user, err := s.userDao.FindUserByUid(context.TODO(), fmt.Sprintf("%d", uid))
+		user, err := s.userDao.FindUserByUid(context.TODO(), uid)
 		if err != nil {
 			logs.Error("FindUserByUid err : %v", err)
 			return nil, biz.SqlError

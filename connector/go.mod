@@ -1,6 +1,6 @@
 module connector
 
-go 1.21.0
+go 1.22.0
 
 require (
 	github.com/cpuguy83/go-md2man/v2 v2.0.3 // indirect

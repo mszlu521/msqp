@@ -51,18 +51,30 @@ type UserGameRecord struct {
 	UnionID       string             `bson:"unionID" json:"unionID"`
 	CreatorUid    string             `bson:"creatorUid" json:"creatorUid"`
 	GameType      int                `bson:"gameType" json:"gameType"`
-	UserList      []GameUser         `bson:"userList" json:"userList"`
+	UserList      []*GameUser        `bson:"userList" json:"userList"`
+	Detail        string             `bson:"detail" json:"detail"`
+	VideoRecordID string             `bson:"videoRecordID" json:"videoRecordID"`
+	CreateTime    int64              `bson:"createTime" json:"createTime"`
+}
+type UserGameRecordAggregate struct {
+	Id            primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	RoomID        string             `bson:"roomID" json:"roomID"`
+	UnionID       string             `bson:"unionID" json:"unionID"`
+	CreatorUid    string             `bson:"creatorUid" json:"creatorUid"`
+	GameType      int                `bson:"gameType" json:"gameType"`
+	UserList      *GameUser          `bson:"userList" json:"userList"`
 	Detail        string             `bson:"detail" json:"detail"`
 	VideoRecordID string             `bson:"videoRecordID" json:"videoRecordID"`
 	CreateTime    int64              `bson:"createTime" json:"createTime"`
 }
 
 type GameUser struct {
-	Uid        string `bson:"uid" json:"uid"`
-	Score      int64  `bson:"score" json:"score"`
-	Nickname   string `bson:"nickname" json:"nickname"`
-	Avatar     string `bson:"avatar" json:"avatar"`
-	SpreaderID string `bson:"spreaderID" json:"spreaderID"`
+	Id         primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	Uid        string             `bson:"uid" json:"uid"`
+	Score      int64              `bson:"score" json:"score"`
+	Nickname   string             `bson:"nickname" json:"nickname"`
+	Avatar     string             `bson:"avatar" json:"avatar"`
+	SpreaderID string             `bson:"spreaderID" json:"spreaderID"`
 }
 
 type GameVideoRecord struct {
