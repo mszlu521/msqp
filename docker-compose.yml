@@ -1,7 +1,8 @@
 version: "3.5"
 services:
   nats:
-    image: nats-qp
+    container_name: nats-qp
+    image: nats
     ports:
       - "8222:8222"
       - "4222:4222"
