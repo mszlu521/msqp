@@ -19,4 +19,6 @@ type RoomFrame interface {
 	SetCurBureau(int)
 	GetCurBureau() int
 	GetMaxBureau() int
+	GetHongBaoList() any
+	GetGameStarted() bool
 }

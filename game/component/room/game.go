@@ -27,7 +27,7 @@ func NewGameFrame(rule proto.GameRule, r base.RoomFrame, session *remote.Session
 		return sz.NewGameFrame(rule, r, session), nil
 	}
 	if rule.GameType == enums.ZNMJ {
-		return mj.NewGameFrame(rule, r), nil
+		return mj.NewGameFrame(rule, r, session), nil
 	}
 	return nil, errors.New("no gameType")
 }

@@ -17,25 +17,37 @@ type MessageData struct {
 	RecipientID int         `json:"recipientID"`
 	Card        mp.CardID   `json:"card"`
 	Operate     OperateType `json:"operate"`
+	Trust       bool        `json:"trust"`
 }
 
 type GameData struct {
-	BankerChairID  int             `json:"bankerChairID"`  //庄家
-	ChairCount     int             `json:"chairCount"`     //总座次人数
-	CurBureau      int             `json:"curBureau"`      //当前局数
-	GameStatus     GameStatus      `json:"gameStatus"`     //游戏状态
-	GameStarted    bool            `json:"gameStarted"`    //是否已经开始
-	Tick           int             `json:"tick"`           //倒计时
-	MaxBureau      int             `json:"maxBureau"`      //最大局数
-	CurChairID     int             `json:"curChairID"`     //当前玩家
-	UserTrustArray []int           `json:"userTrustArray"` //托管
-	HandCards      [][]mp.CardID   `json:"handCards"`      //手牌
-	OperateArrays  [][]OperateType `json:"operateArrays"`  //操作
-	OperateRecord  []OperateRecord `json:"operateRecord"`  //操作记录
-	RestCardsCount int             `json:"restCardsCount"` //剩余牌数
-	Result         *GameResult     `json:"result"`         //结算
+	BankerChairID  int              `json:"bankerChairID"`  //庄家
+	ChairCount     int              `json:"chairCount"`     //总座次人数
+	CurBureau      int              `json:"curBureau"`      //当前局数
+	GameStatus     GameStatus       `json:"gameStatus"`     //游戏状态
+	GameStarted    bool             `json:"gameStarted"`    //是否已经开始
+	Tick           int              `json:"tick"`           //倒计时
+	MaxBureau      int              `json:"maxBureau"`      //最大局数
+	CurChairID     int              `json:"curChairID"`     //当前玩家
+	UserTrustArray []bool           `json:"userTrustArray"` //托管
+	HandCards      [][]mp.CardID    `json:"handCards"`      //手牌
+	OperateArrays  [][]OperateType  `json:"operateArrays"`  //操作
+	OperateRecord  []*OperateRecord `json:"operateRecord"`  //操作记录
+	RestCardsCount int              `json:"restCardsCount"` //剩余牌数
+	Result         *GameResult      `json:"result"`         //结算
 }
-
+type UserWinRecord struct {
+	Uid      string `json:"uid"`
+	Nickname string `json:"nickname"`
+	Avatar   string `json:"avatar"`
+	Score    int    `json:"score"`
+}
+type UserRecord struct {
+	Uid      string `json:"uid"`
+	Nickname string `json:"nickname"`
+	Avatar   string `json:"avatar"`
+	ChairID  int    `json:"chairID"`
+}
 type GameResult struct {
 	Scores          []int         `json:"scores"`
 	HandCards       [][]mp.CardID `json:"handCards"`
@@ -47,19 +59,19 @@ type GameResult struct {
 	HuType          OperateType   `json:"huType"`
 }
 type MyMaCard struct {
-	Card int  `json:"card"`
-	Win  bool `json:"win"`
+	Card mp.CardID `json:"card"`
+	Win  bool      `json:"win"`
 }
 type OperateRecord struct {
 	ChairID int         `json:"chairID"`
-	Card    mp.CardID   `json:"card"`
+	Card    *mp.CardID  `json:"card"`
 	Operate OperateType `json:"operate"`
 }
 
 type ReviewRecord struct {
 	RoomID        string               `json:"roomID"`
 	HandCards     [][]mp.CardID        `json:"handCards"`
-	OperateRecord []OperateRecord      `json:"operateRecord"`
+	OperateRecord []*OperateRecord     `json:"operateRecord"`
 	UserArray     []proto.UserRoomData `json:"userArray"`
 	CardsCount    int                  `json:"cardsCount"`
 	MaxBureau     int                  `json:"maxBureau"`
@@ -73,6 +85,10 @@ type BureauReview struct {
 	Avatar   string `json:"avatar"`
 	IsBanker bool   `json:"isBanker"`
 }
+
+const operateTm1 = 30 // 弃牌操作时间
+const operateTm2 = 30 //  碰杠操作时间
+
 type OperateType int
 
 const (
@@ -164,7 +180,7 @@ func GameDismissPushData(
 	userArray []*DismissUser,
 	creator *Creator,
 	reason enums.RoomDismissReason,
-	hongBaoList []string) any {
+	hongBaoList any) any {
 	return map[string]any{
 		"type": GameDismissPush,
 		"data": map[string]any{
@@ -234,9 +250,9 @@ func GameBureauPushData(curBureau int) any {
 	}
 }
 func GameTurnPushData(chairID int, card mp.CardID, tick int, operateArray []OperateType) any {
-	//card 不存在牌中 需要返回null 客户端是识别null 会做处理
+	//card 如果小于等于0 代表 不存在 需要返回null 客户端是识别null 会做处理
 	var c any
-	if card > 0 && card < 36 {
+	if card > 0 {
 		c = card
 	}
 	return map[string]any{
@@ -278,7 +294,7 @@ func GameTurnOperatePushData(chairID int, card mp.CardID, operate OperateType, s
 		"pushRouter": "GameMessagePush",
 	}
 }
-func GameResultPushData(result GameResult) any {
+func GameResultPushData(result *GameResult) any {
 	return map[string]any{
 		"type": GameResultPush,
 		"data": map[string]any{
@@ -287,12 +303,22 @@ func GameResultPushData(result GameResult) any {
 		"pushRouter": "GameMessagePush",
 	}
 }
-
-func IndexOf[T OperateType](list []T, v T) int {
-	for index, value := range list {
-		if value == v {
-			return index
-		}
+func GameTrustPushData(chairID int, trust bool) any {
+	return map[string]any{
+		"type": GameTrustPush,
+		"data": map[string]any{
+			"chairID": chairID,
+			"trust":   trust,
+		},
+		"pushRouter": "GameMessagePush",
 	}
-	return -1
+}
+func GameReviewPushData(record []*ReviewRecord) any {
+	return map[string]any{
+		"type": GameReviewPush,
+		"data": map[string]any{
+			"reviewRecord": record,
+		},
+		"pushRouter": "GameMessagePush",
+	}
 }

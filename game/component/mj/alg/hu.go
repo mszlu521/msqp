@@ -1,6 +1,9 @@
 package alg
 
-import "game/component/mj/mp"
+import (
+	"fmt"
+	"game/component/mj/mp"
+)
 
 var table = NewTable()
 
@@ -24,12 +27,15 @@ func NewHuLogic() *HuLogic {
 // 3. 已经把胡牌所有的可能计算出来了，然后将其加载进内存，空间换时间，进行胡牌检测的时候，直接进行匹配即可，查表法
 // 1A 2A 3A 4A 4A 4A 6A 6A 6A 2B 3B 4B 5C 5C  111303000  011100000 000020000  = hu
 // 先去生成表（所有胡牌的可能） 8张表   feng 8张
-func (h *HuLogic) CheckHu(cards []mp.CardID, guiList []mp.CardID, card mp.CardID) bool {
-	if card > 0 && card < 36 && len(cards) < 14 {
-		cards = append(cards, card)
+func (h *HuLogic) CheckHu(cardInHandList []mp.CardID, guiList []mp.CardID, cardOngoing mp.CardID) bool {
+	// 复制 cardInHandList
+	cardList := make([]mp.CardID, len(cardInHandList))
+	copy(cardList, cardInHandList)
+	if cardOngoing > 0 && cardOngoing < 36 {
+		cardList = append(cardList, cardOngoing)
 	}
 	//guiList []{Zhong}
-	return h.isHu(cards, guiList)
+	return h.isHu(cardList, guiList)
 }
 
 func (h *HuLogic) isHu(cardList []mp.CardID, guiList []mp.CardID) bool {
@@ -50,6 +56,7 @@ func (h *HuLogic) isHu(cardList []mp.CardID, guiList []mp.CardID) bool {
 			cards[i][j]++
 		}
 	}
+	fmt.Printf("hu cards:%v \n", cards)
 	cardData := &CardData{
 		guiCount: guiCount,
 		jiang:    false,

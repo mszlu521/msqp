@@ -10,7 +10,6 @@ type Task struct {
 	Name     string
 	ticker   *time.Ticker
 	stopChan chan struct{}
-	wg       sync.WaitGroup
 	once     sync.Once
 }
 
@@ -22,9 +21,7 @@ func NewTask(name string, interval time.Duration, job func()) *Task {
 		Name:     name,
 	}
 
-	task.wg.Add(1)
 	go func() {
-		defer task.wg.Done()
 		for {
 			select {
 			case <-task.ticker.C:
@@ -37,11 +34,10 @@ func NewTask(name string, interval time.Duration, job func()) *Task {
 	return task
 }
 
-// Stop 停止定时任务
+// Stop 停止定时任务（非阻塞）
 func (t *Task) Stop() {
-	t.ticker.Stop()
 	t.once.Do(func() {
+		t.ticker.Stop()
 		close(t.stopChan)
 	})
-	t.wg.Wait()
 }

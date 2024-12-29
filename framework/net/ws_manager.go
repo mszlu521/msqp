@@ -158,12 +158,10 @@ func (m *Manager) HandshakeHandler(packet *protocol.Packet, c Connection) error 
 }
 
 func (m *Manager) HandshakeAckHandler(packet *protocol.Packet, c Connection) error {
-	logs.Info("receiver handshake ack stream...")
 	return nil
 }
 
 func (m *Manager) HeartbeatHandler(packet *protocol.Packet, c Connection) error {
-	logs.Info("receiver heartbeat stream:%v", packet.Type)
 	var res []byte
 	data, _ := json.Marshal(res)
 	buf, err := protocol.Encode(packet.Type, data)
@@ -176,8 +174,6 @@ func (m *Manager) HeartbeatHandler(packet *protocol.Packet, c Connection) error 
 
 func (m *Manager) MessageHandler(packet *protocol.Packet, c Connection) error {
 	message := packet.MessageBody()
-	logs.Info("receiver stream body, type=%v, router=%v, data:%v",
-		message.Type, message.Route, string(message.Data))
 	//connector.entryHandler.entry
 	routeStr := message.Route
 	routers := strings.Split(routeStr, ".")
@@ -215,7 +211,6 @@ func (m *Manager) MessageHandler(packet *protocol.Packet, c Connection) error {
 			logs.Error("remote send stream selectDst err:%v", err)
 			return err
 		}
-		logs.Info("send sessionData:%v", c.GetSession())
 		msg := &stream.Msg{
 			Cid:         c.GetSession().Cid,
 			Uid:         c.GetSession().Uid,
@@ -240,7 +235,6 @@ func (m *Manager) MessageHandler(packet *protocol.Packet, c Connection) error {
 }
 
 func (m *Manager) KickHandler(packet *protocol.Packet, c Connection) error {
-	logs.Info("receiver kick  stream...")
 	return nil
 }
 
@@ -255,11 +249,9 @@ func (m *Manager) remoteReadChanHandler() {
 					continue
 				}
 				if msg.SessionType != stream.Session {
-					logs.Info("sub nats message:%v", string(msg.Body.Data))
 				}
 				if msg.SessionType == stream.Session {
 					//需要特出处理，session类型是存储在connection中的session 并不 推送客户端
-					logs.Info("sessionData:%v", msg.SessionData)
 					m.setSessionData(msg)
 					continue
 				}
@@ -292,7 +284,6 @@ func (m *Manager) selectDst(serverType string) (string, error) {
 func (m *Manager) Response(msg *stream.Msg) {
 	connection, ok := m.clients[msg.Cid]
 	if !ok {
-		logs.Info("%s client down，uid=%s", msg.Cid, msg.Uid)
 		return
 	}
 	buf, err := protocol.MessageEncode(msg.Body)
@@ -321,7 +312,6 @@ func (m *Manager) remotePushChanHandler() {
 		select {
 		case body, ok := <-m.RemotePushChan:
 			if ok {
-				logs.Info("nats push stream:%v", body)
 				if body.Body.Type == protocol.Push {
 					m.Response(body)
 				}

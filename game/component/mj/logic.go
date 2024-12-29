@@ -4,6 +4,7 @@ import (
 	"common/utils"
 	"game/component/mj/alg"
 	"game/component/mj/mp"
+	"sort"
 	"sync"
 )
 
@@ -95,19 +96,23 @@ func (l *Logic) getRestCardsCount() int {
 }
 
 func (l *Logic) canHu(cards []mp.CardID, card mp.CardID) bool {
+	if l.qidui && l.canHuQidui(cards, card) {
+		return true
+	}
 	//胡牌判断 复杂的一套逻辑
-	return l.huLogic.CheckHu(cards, []mp.CardID{Zhong}, card)
+	hu := l.huLogic.CheckHu(cards, []mp.CardID{Zhong}, card)
+	return hu
 }
 
-func (l *Logic) getOperateArray(cards []mp.CardID, card mp.CardID) []OperateType {
+func (l *Logic) getOperateArray(cards []mp.CardID, outCard mp.CardID) []OperateType {
 	operateArray := make([]OperateType, 0)
-	if card < 0 && card > 35 {
-		return operateArray
-	}
+	sort.Slice(cards, func(i, j int) bool {
+		return cards[i] < cards[j]
+	})
 	//判断碰 已经有两个相同的了 如果 card和这两个一直 能凑成三个一样的
 	sameCount := 0
 	for _, v := range cards {
-		if v == card {
+		if v == outCard {
 			sameCount++
 		}
 	}
@@ -117,7 +122,7 @@ func (l *Logic) getOperateArray(cards []mp.CardID, card mp.CardID) []OperateType
 	if sameCount >= 3 {
 		operateArray = append(operateArray, GangChi)
 	}
-	if l.canHu(cards, card) {
+	if l.canHu(cards, outCard) {
 		operateArray = append(operateArray, HuChi)
 	}
 	if len(operateArray) > 0 {
@@ -137,6 +142,37 @@ func (l *Logic) getCard(card mp.CardID) mp.CardID {
 	}
 	l.cards = append(l.cards[:indexOf], l.cards[indexOf+1:]...)
 	return card
+}
+
+func (l *Logic) getCardCount(cardIDS []mp.CardID, card mp.CardID) int {
+	count := 0
+	for _, v := range cardIDS {
+		if v == card {
+			count++
+		}
+	}
+	return count
+}
+
+func (l *Logic) canHuQidui(cards []mp.CardID, card mp.CardID) bool {
+	return false
+}
+
+// 获取玩家所有马牌
+func (l *Logic) getMaCardsByChairID() []mp.CardID {
+	return []mp.CardID{
+		Wan1, Wan5, Wan9, Tiao1, Tiao5, Tiao9, Tong1, Tong5, Tong9, Zhong,
+	}
+}
+
+func (l *Logic) getHongZhongCount(cards []mp.CardID) int {
+	count := 0
+	for _, v := range cards {
+		if v == Zhong {
+			count++
+		}
+	}
+	return count
 }
 
 func NewLogic(gameType GameType, qidui bool) *Logic {

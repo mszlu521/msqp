@@ -43,7 +43,6 @@ func (a *App) readChanMsg(serverId string) {
 		case msg := <-a.readChan:
 			var remoteMsg stream.Msg
 			json.Unmarshal(msg, &remoteMsg)
-			logs.Info("app read stream: %v", remoteMsg)
 			session := remote.NewSession(a.remoteCli, &remoteMsg)
 			session.SetServerId(serverId)
 			session.SetData(remoteMsg.SessionData)
