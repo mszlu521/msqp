@@ -2,6 +2,11 @@
 # https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
 #
 # Binaries for programs and plugins
+*.idea/
+docker/redis/data/*
+docker/mongo/db/*
+docker/mongo/log/*
+docker/etcd/data/*
 *.exe
 *.exe~
 *.dll

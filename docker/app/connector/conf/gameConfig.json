@@ -1,0 +1,70 @@
+{
+  "smsAuthConfig":{
+    "value": {
+      "AccessKeyId": "111",
+      "AccessKeySecret": "222",
+      "SignName": "码神之路",
+      "TemplateCode": "333"
+    },
+    "describe": "阿里云短信验证码配置参数",
+    "backend": true
+  },
+  "freeShopItem": {
+    "value": "false",
+    "describe": "免费充值，值为true时起效（测试时使用，正式运营切勿开启）",
+    "backend": true
+  },
+  "authPhone":{
+    "value": "false",
+    "describe": "是否校验验证码",
+    "backend": true
+  },
+  "startGold": {
+    "value": 10000,
+    "describe": "新注册用户初始金币数量",
+    "backend": true
+  },
+
+  "webServerUrl": {
+    "value": "http://127.0.0.1:13000",
+    "describe": "网页服务器地址"
+  },
+  "gameServerUrl": {
+    "value": "http://127.0.0.1:14000",
+    "describe": "网页服务器地址"
+  },
+
+  "downloadUrl": {
+    "value": "http://127.0.0.1/download",
+    "describe": "游戏下载地址"
+  },
+
+  "iconUrl": {
+    "value": "http://127.0.0.1/icon.png",
+    "describe": "分享的icon地址"
+  },
+
+  "shareImgUrl": {
+    "value": "http://127.0.0.1/img_share.jpg",
+    "describe": "分享地址"
+  },
+
+  "loopBroadcastContent": {
+    "value": "码神之路棋牌游戏go后端实战教程,大厂技术专家带你学go",
+    "describe": "循环广播内容"
+  },
+
+  "minRechargeCount": {
+    "value": 20,
+    "describe": "最少的充值金额"
+  },
+
+  "unionConfig": {
+    "value": {
+      "userMaxUnionCount": 20
+    }
+  },
+  "unionActiveImgArr": {
+    "value": []
+  }
+}

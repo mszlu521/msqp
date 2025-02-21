@@ -1,0 +1,31 @@
+metricPort: 5854
+appName: user
+log:
+  level: DEBUG
+grpc:
+  addr: 0.0.0.0:11500
+etcd:
+  addrs:
+    - etcd3-qp:2379
+  register:
+    name: user
+    addr: user-qp:11500
+    version: v1
+    weight: 10
+    ttl: 10
+db:
+  mongo:
+    url: mongodb://mongo-qp:27017
+    userName: root
+    password: mszlu!@#987432@#
+    minPoolSize: 10
+    maxPoolSize: 100
+    db: msqp
+  redis:
+    addr: redis6-qp:6379
+    poolSize: 10
+    minIdleConns: 1
+    password:
+jwt:
+  secret: 123456
+  exp: 7

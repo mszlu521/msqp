@@ -1,0 +1,101 @@
+version: "3.5"
+services:
+  nats:
+    container_name: nats-qp
+    image: nats
+    ports:
+      - "8222:8222"
+      - "4222:4222"
+    command: "--http_port 8222 "
+  Etcd:
+    container_name: etcd3-qp
+    image: bitnami/etcd:${ETCD_VERSION}
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    environment:
+      - ALLOW_NONE_AUTHENTICATION=yes
+      - ETCD_SNAPSHOT_COUNT=10000
+      - ETCD_QUOTA_BACKEND_BYTES=6442450944
+    privileged: true
+    volumes:
+      - ${ETCD_DIR}/data:/bitnami/etcd/data
+    ports:
+      - ${ETCD_PORT}:2379
+      - 2380:2380
+  mongo:
+    image: mongo:4.2.1
+    restart: always
+    container_name: mongo-qp
+    ports:
+      - 27018:27017
+    volumes:
+      - ${MONGO_DIR}/db:/data/db # 挂载数据目录
+      - ${MONGO_DIR}/log:/var/log/mongodb  # 挂载日志目录
+    privileged: true  # 设置容器的权限为root
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root  # 账号
+      MONGO_INITDB_ROOT_PASSWORD: mszlu!@#987432@#
+  Redis:
+    container_name: redis6-qp
+    image: redis:${REDIS_VERSION}
+    restart: always
+    volumes:
+      - ${REDIS_DIR}/data:/data
+      - ${REDIS_DIR}/conf/redis.conf:/etc/redis/redis.conf
+    ports:
+      - ${REDIS_PORT}:6379
+    command: redis-server /etc/redis/redis.conf
+  Gate:
+    container_name: gate-qp
+    image: gate:${APP_VERSION}
+    restart: always
+    volumes:
+      - ${GATE_DIR}/application.yml:/app/application.yml
+    ports:
+      - "13000:13000"
+  User:
+    container_name: user-qp
+    image: user:${APP_VERSION}
+    restart: always
+    volumes:
+      - ${USER_DIR}/application.yml:/app/application.yml
+    ports:
+      - "11500:11500"
+  Connector:
+    container_name: connector-qp
+    image: connector:${APP_VERSION}
+    restart: always
+    volumes:
+      - ${CONNECTOR_DIR}/conf/:/app/conf/
+    command:
+      - "--config=/app/conf/application.yml"
+      - "--serverId=connector001"  # 保持与容器名一致
+      - "--gameDir=/app/conf"  # 指向数据存储目录
+    ports:
+      - "12000:12000"
+  Hall:
+    container_name: hall-qp
+    image: hall:${APP_VERSION}
+    restart: always
+    volumes:
+      - ${HALL_DIR}/conf/:/app/conf/
+    command:
+      - "--config=/app/conf/application.yml"
+      - "--serverId=hall-001"  # 保持与容器名一致
+      - "--gameDir=/app/conf"  # 指向数据存储目录
+    ports:
+      - "5857:5857"
+  Game:
+    container_name: game-qp
+    image: game:${APP_VERSION}
+    restart: always
+    volumes:
+      - ${GAME_DIR}/conf/:/app/conf/
+    command:
+      - "--config=/app/conf/application.yml"
+      - "--serverId=game-001"  # 保持与容器名一致
+      - "--gameDir=/app/conf"  # 指向数据存储目录
+    ports:
+      - "5858:5858"
