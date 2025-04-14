@@ -156,7 +156,7 @@ func (r *Room) resetRoom(session *remote.Session) error {
 		return err
 	}
 	for _, v := range r.users {
-		go r.addKickScheduleEvent(session, v)
+		go r.addKickScheduleEvent(session, v.Uid)
 	}
 	return nil
 }
@@ -238,7 +238,7 @@ func (r *Room) UserEntryRoom(
 	// 推送玩家自己进入房间的消息
 	r.SelfEntryRoomPush(session, data.Uid)
 	r.GameFrame.OnEventUserEntry(user, session)
-	go r.addKickScheduleEvent(session, roomUserInfo)
+	go r.addKickScheduleEvent(session, userInfo.Uid)
 	return nil
 }
 
@@ -312,9 +312,13 @@ func (r *Room) getRoomSceneInfoPush(session *remote.Session) {
 	}
 }
 
-func (r *Room) addKickScheduleEvent(session *remote.Session, roomUser *proto.RoomUser) {
+func (r *Room) addKickScheduleEvent(session *remote.Session, uid string) {
 	if r.TryLock() {
 		defer r.Unlock()
+	}
+	roomUser, hasUser := r.users[uid]
+	if !hasUser {
+		return
 	}
 	if r.hasStartedOneBureau {
 		return

@@ -153,6 +153,10 @@ func (g *GameFrame) GetEnterGameData(session *remote.Session) any {
 		return nil
 	}
 	chairID := user.ChairID
+	if g.curChairID == -1 {
+		//证明是第一个人进入 座次号分配给此人
+		g.curChairID = chairID
+	}
 	gameData := &GameData{
 		GameStatus:     g.gameStatus,
 		GameStarted:    g.gameStarted,
