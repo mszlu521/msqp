@@ -217,7 +217,7 @@ func (g *GameFrame) startGame(session *remote.Session) {
 					g.gameData.GameStatus == PourScore {
 					g.gameData.TrustTmArray[u.ChairID]++
 					if g.gameData.TrustTmArray[u.ChairID] >= 30 {
-						g.onGameTrust(u, true, nil)
+						g.onGameTrust(u, true, session)
 					}
 				}
 			}
