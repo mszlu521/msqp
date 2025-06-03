@@ -108,7 +108,11 @@ func (g *GameFrame) OnEventUserOffLine(user *proto.RoomUser, session *remote.Ses
 	}
 }
 
-func (g *GameFrame) IsUserEnableLeave(int) bool {
+func (g *GameFrame) IsUserEnableLeave(chairID int) bool {
+	//user := g.getUserByChairID(chairID)
+	//if user != nil {
+	//	return user.UserStatus == enums.Offline
+	//}
 	return g.gameData.GameStatus == GameStatusNone
 }
 

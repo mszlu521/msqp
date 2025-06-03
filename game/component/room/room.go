@@ -151,7 +151,7 @@ func (r *Room) resetRoom(session *remote.Session) error {
 	}
 	r.clearUserArr = make(map[string]*entity.GameUser)
 	var err error
-	r.GameFrame, err = NewGameFrame(r.GameRule, r, nil)
+	r.GameFrame, err = NewGameFrame(r.GameRule, r, session)
 	if err != nil {
 		return err
 	}
