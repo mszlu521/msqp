@@ -22,6 +22,10 @@ type Config struct {
 	Etcd       EtcdConf                `mapstructure:"etcd"`
 	Domain     map[string]Domain       `mapstructure:"domain"`
 	Services   map[string]ServicesConf `mapstructure:"services"`
+	Server     ServerConf              `mapstructure:"server"`
+}
+type ServerConf struct {
+	MaxConn int `mapstructure:"maxConn"`
 }
 
 type ServicesConf struct {

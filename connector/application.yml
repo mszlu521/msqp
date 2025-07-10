@@ -1,6 +1,8 @@
 httpPort: 13000
 metricPort: 5856
 appName: connector
+server:
+  maxConn: 1000
 log:
   level: DEBUG
 db:

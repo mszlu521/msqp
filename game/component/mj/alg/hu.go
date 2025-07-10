@@ -39,6 +39,7 @@ func (h *HuLogic) CheckHu(cardInHandList []mp.CardID, guiList []mp.CardID, cardO
 }
 
 func (h *HuLogic) isHu(cardList []mp.CardID, guiList []mp.CardID) bool {
+	fmt.Printf("hu cardList:%v guiList:%v", cardList, guiList)
 	// A B C D
 	cards := [][]int{
 		{0, 0, 0, 0, 0, 0, 0, 0, 0},

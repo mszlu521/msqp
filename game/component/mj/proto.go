@@ -1,7 +1,9 @@
 package mj
 
 import (
+	"common/logs"
 	"core/models/enums"
+	"encoding/json"
 	"game/component/mj/mp"
 	"game/component/proto"
 )
@@ -250,12 +252,12 @@ func GameBureauPushData(curBureau int) any {
 	}
 }
 func GameTurnPushData(chairID int, card mp.CardID, tick int, operateArray []OperateType) any {
-	//card 如果小于等于0 代表 不存在 需要返回null 客户端是识别null 会做处理
+	//card 如果不是有效牌 代表 不存在 需要返回null 客户端是识别null 会做处理
 	var c any
-	if card > 0 {
+	if card > 0 && card < 36 {
 		c = card
 	}
-	return map[string]any{
+	m := map[string]any{
 		"type": GameTurnPush,
 		"data": map[string]any{
 			"chairID":      chairID,
@@ -265,6 +267,9 @@ func GameTurnPushData(chairID int, card mp.CardID, tick int, operateArray []Oper
 		},
 		"pushRouter": "GameMessagePush",
 	}
+	marshal, _ := json.Marshal(m)
+	logs.Info("GameTurnPushData: %s", string(marshal))
+	return m
 }
 func GameChatPushData(chairID, t int, msg string, recipientID int) any {
 	return map[string]any{
@@ -283,7 +288,7 @@ func GameTurnOperatePushData(chairID int, card mp.CardID, operate OperateType, s
 	if card > 0 && card < 36 {
 		c = card
 	}
-	return map[string]any{
+	m := map[string]any{
 		"type": GameTurnOperatePush,
 		"data": map[string]any{
 			"chairID": chairID,
@@ -293,6 +298,9 @@ func GameTurnOperatePushData(chairID int, card mp.CardID, operate OperateType, s
 		},
 		"pushRouter": "GameMessagePush",
 	}
+	marshal, _ := json.Marshal(m)
+	logs.Info("GameTurnOperatePushData: %s", string(marshal))
+	return m
 }
 func GameResultPushData(result *GameResult) any {
 	return map[string]any{

@@ -63,7 +63,6 @@ func (p *Pusher) pushChanRead() {
 					SessionType: stream.Normal,
 				}
 				result, _ := json.Marshal(msgData)
-				logs.Info("push stream dst:%v,%v", dst, string(msgData.Body.Data))
 				err := p.client.SendMsg(msgData.Dst, result)
 				if err != nil {
 					logs.Error("push stream err:%v, stream=%v", err, msgData)

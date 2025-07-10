@@ -423,6 +423,7 @@ func (r *Room) cancelAllScheduler() {
 }
 
 func (r *Room) userReady(uid string, session *remote.Session) {
+	fmt.Println("userReady", uid)
 	if r.gameStarted {
 		return
 	}

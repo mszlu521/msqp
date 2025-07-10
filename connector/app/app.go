@@ -23,7 +23,7 @@ func Run(ctx context.Context, serverId string) error {
 		exit = c.Close
 		manager := repo.New()
 		c.RegisterHandler(route.Register(manager))
-		c.Run(serverId)
+		c.Run(serverId, config.Conf.Server.MaxConn)
 	}()
 	stop := func() {
 		//other

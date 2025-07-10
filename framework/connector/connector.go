@@ -21,10 +21,10 @@ func Default() *Connector {
 	}
 }
 
-func (c *Connector) Run(serverId string) {
+func (c *Connector) Run(serverId string, maxConn int) {
 	if !c.isRunning {
 		//启动websocket和nats
-		c.wsManager = net.NewManager()
+		c.wsManager = net.NewManager(maxConn)
 		c.wsManager.ConnectorHandlers = c.handlers
 		//启动nats nats server不会存储消息
 		c.remoteCli = remote.NewNatsClient(serverId, c.wsManager.RemoteReadChan)

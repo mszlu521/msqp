@@ -74,3 +74,11 @@ func (s *Session) PushData(dst string, router string, message *protocol.Message)
 		logs.Error("push session data err:%v", err)
 	}
 }
+
+func (s *Session) Close() {
+	s.Lock()
+	defer s.Unlock()
+	//清理资源
+	s.data = make(map[string]any)
+	s.all = make(map[string]any)
+}

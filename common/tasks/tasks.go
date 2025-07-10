@@ -22,6 +22,7 @@ func NewTask(name string, interval time.Duration, job func()) *Task {
 	}
 
 	go func() {
+		defer task.ticker.Stop() // 确保ticker被停止
 		for {
 			select {
 			case <-task.ticker.C:

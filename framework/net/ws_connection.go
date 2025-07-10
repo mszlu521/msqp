@@ -2,11 +2,8 @@ package net
 
 import (
 	"common/logs"
-	"fmt"
-	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -54,7 +51,19 @@ func (c *WsConnection) Close() {
 		if c.pingTicker != nil {
 			c.pingTicker.Stop()
 		}
+		//清理session资源
+		if c.Session != nil {
+			c.Session.Close()
+		}
 		logs.Info("client[%s] connection closed", c.Cid)
+
+		// 将连接对象放回池中以便复用
+		// 使用延迟执行确保所有资源都已清理
+		go func(conn *WsConnection) {
+			// 给一些时间让其他goroutine完成工作
+			time.Sleep(100 * time.Millisecond)
+			GetWsConnectionPool().Put(conn)
+		}(c)
 	})
 }
 
@@ -85,7 +94,7 @@ func (c *WsConnection) writeMessage() {
 				c.Close()
 				return
 			}
-			//logs.Error("%v", stream)
+			logs.Warn("%v", string(message))
 			if err := c.Conn.WriteMessage(websocket.BinaryMessage, message); err != nil {
 				logs.Error("client[%s] write stream err :%v", c.Cid, err)
 			}
@@ -130,6 +139,7 @@ func (c *WsConnection) readMessage() {
 				}
 				return
 			}
+			logs.Warn("receive====%v", string(message))
 			//客户端发来的消息是二进制消息
 			if messageType == websocket.BinaryMessage {
 				select {
@@ -154,14 +164,6 @@ func (c *WsConnection) PongHandler(data string) error {
 }
 
 func NewWsConnection(conn *websocket.Conn, manager *Manager) *WsConnection {
-	cid := fmt.Sprintf("%s-%s-%d", uuid.New().String(), manager.ServerId, atomic.AddUint64(&cidBase, 1))
-	return &WsConnection{
-		Conn:      conn,
-		manager:   manager,
-		Cid:       cid,
-		WriteChan: make(chan []byte, 1024),
-		ReadChan:  manager.ClientReadChan,
-		Session:   NewSession(cid, manager),
-		closeChan: make(chan struct{}),
-	}
+	// 从连接池获取对象
+	return GetWsConnectionPool().Get(conn, manager)
 }
