@@ -79,9 +79,11 @@ type Manager struct {
 	ConnectorHandlers LogicHandler
 
 	// 远程消息处理
-	RemoteReadChan chan []byte
-	RemoteCli      remote.Client
-	RemotePushChan chan *stream.Msg
+	RemoteReadChan     chan []byte
+	RemoteCli          remote.Client
+	RemotePushChan     chan *stream.Msg
+	remotePushMu       sync.Mutex
+	remotePushOverflow []*stream.Msg
 
 	// 共享数据
 	data map[string]any
@@ -508,48 +510,30 @@ func (m *Manager) remoteReadChanHandler() {
 			return
 		}
 
-		// 并行处理批次中的消息
-		var wg sync.WaitGroup
 		for _, body := range batch {
-			wg.Add(1)
-			go func(msgBody []byte) {
-				defer wg.Done()
+			var msg stream.Msg
+			if err := json.Unmarshal(body, &msg); err != nil {
+				logs.Error("nats remote stream format err:%v", err)
+				continue
+			}
 
-				var msg stream.Msg
-				if err := json.Unmarshal(msgBody, &msg); err != nil {
-					logs.Error("nats remote stream format err:%v", err)
-					return
-				}
+			if msg.SessionType == stream.Session {
+				//需要特出处理，session类型是存储在connection中的session 并不 推送客户端
+				m.setSessionData(msg)
+				continue
+			}
 
-				if msg.SessionType == stream.Session {
-					//需要特出处理，session类型是存储在connection中的session 并不 推送客户端
-					m.setSessionData(msg)
-					return
+			if msg.Body != nil {
+				if msg.Body.Type == protocol.Request || msg.Body.Type == protocol.Response {
+					//给客户端回信息 都是 response
+					msg.Body.Type = protocol.Response
+					m.Response(&msg)
 				}
-
-				if msg.Body != nil {
-					if msg.Body.Type == protocol.Request || msg.Body.Type == protocol.Response {
-						//给客户端回信息 都是 response
-						msg.Body.Type = protocol.Response
-						m.Response(&msg)
-					}
-					if msg.Body.Type == protocol.Push {
-						select {
-						case m.RemotePushChan <- &msg:
-							// 成功发送到推送通道
-						default:
-							// 通道已满，直接处理
-							if msg.Body.Type == protocol.Push {
-								m.Response(&msg)
-							}
-						}
-					}
+				if msg.Body.Type == protocol.Push {
+					m.enqueueRemotePush(&msg)
 				}
-			}(body)
+			}
 		}
-
-		// 等待所有消息处理完成
-		wg.Wait()
 		batch = batch[:0] // 清空批次
 	}
 
@@ -574,6 +558,40 @@ func (m *Manager) remoteReadChanHandler() {
 			processBatch()
 		}
 	}
+}
+
+func (m *Manager) enqueueRemotePush(msg *stream.Msg) {
+	if msg == nil {
+		return
+	}
+	m.remotePushMu.Lock()
+	defer m.remotePushMu.Unlock()
+	if len(m.remotePushOverflow) > 0 {
+		m.remotePushOverflow = append(m.remotePushOverflow, msg)
+		return
+	}
+	select {
+	case m.RemotePushChan <- msg:
+	default:
+		m.remotePushOverflow = append(m.remotePushOverflow, msg)
+	}
+}
+
+func (m *Manager) takeRemotePushOverflow(limit int) []*stream.Msg {
+	m.remotePushMu.Lock()
+	defer m.remotePushMu.Unlock()
+	if len(m.RemotePushChan) > 0 || len(m.remotePushOverflow) == 0 {
+		return nil
+	}
+	if limit <= 0 || limit > len(m.remotePushOverflow) {
+		limit = len(m.remotePushOverflow)
+	}
+	result := append([]*stream.Msg(nil), m.remotePushOverflow[:limit]...)
+	m.remotePushOverflow = m.remotePushOverflow[limit:]
+	if len(m.remotePushOverflow) == 0 {
+		m.remotePushOverflow = nil
+	}
+	return result
 }
 
 // LoadBalanceStrategy 定义负载均衡策略类型
@@ -1092,8 +1110,8 @@ func (m *Manager) Response(msg *stream.Msg) {
 				}
 			}
 
-			// 可选：等待所有消息发送完成
-			// sendWg.Wait()
+			// Preserve the protocol order for consecutive pushes to the same user.
+			sendWg.Wait()
 		}
 	} else if msg.Cid != "" {
 		// 发送消息给单个客户端
@@ -1117,21 +1135,23 @@ func (m *Manager) remotePushChanHandler() {
 			return
 		}
 
-		// 并行处理批次中的消息
-		var wg sync.WaitGroup
 		for _, msg := range batch {
-			if msg.Body.Type == protocol.Push {
-				wg.Add(1)
-				go func(pushMsg *stream.Msg) {
-					defer wg.Done()
-					m.Response(pushMsg)
-				}(msg)
+			if msg != nil && msg.Body != nil && msg.Body.Type == protocol.Push {
+				m.Response(msg)
 			}
 		}
-
-		// 等待所有消息处理完成
-		wg.Wait()
 		batch = batch[:0] // 清空批次
+		for {
+			overflow := m.takeRemotePushOverflow(batchSize)
+			if len(overflow) == 0 {
+				break
+			}
+			for _, msg := range overflow {
+				if msg != nil && msg.Body != nil && msg.Body.Type == protocol.Push {
+					m.Response(msg)
+				}
+			}
+		}
 	}
 
 	ticker := time.NewTicker(5 * time.Millisecond)

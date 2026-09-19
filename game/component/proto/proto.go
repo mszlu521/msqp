@@ -2,13 +2,45 @@ package proto
 
 import (
 	"core/models/enums"
+	"encoding/json"
 	"framework/msError"
 )
+
+// CardTypes accepts both the legacy client representation (enum number or
+// null) and the normalized boolean representation used by newer clients.
+type CardTypes map[string]bool
+
+func (c *CardTypes) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	result := make(CardTypes, len(raw))
+	for key, value := range raw {
+		if string(value) == "null" {
+			result[key] = false
+			continue
+		}
+		var enabled bool
+		if err := json.Unmarshal(value, &enabled); err == nil {
+			result[key] = enabled
+			continue
+		}
+		var enumValue float64
+		if err := json.Unmarshal(value, &enumValue); err != nil {
+			return err
+		}
+		result[key] = enumValue != 0
+	}
+	*c = result
+	return nil
+}
 
 type GameRule struct {
 	Id                string            `json:"id"`
 	RuleName          string            `json:"ruleName"`
 	AddScores         []int             `json:"addScores"`      //加注分
+	CanPourScores     []int             `json:"canPourScores"`  //牛牛/三公可下注档位
 	BaseScore         int               `json:"baseScore"`      //底分 sz hz
 	Bureau            int               `json:"bureau"`         //局数 sz hz
 	CanEnter          bool              `json:"canEnter"`       //中途进人 sz hz
@@ -29,10 +61,37 @@ type GameRule struct {
 	TrustTm           int               `json:"trustTm"`        //托管时长 hz
 	Fangzuobi         bool              `json:"fangzuobi"`      //防作弊 sz
 	MaxScore          int               `json:"maxScore"`       //最大加注分 sz
+	MaxCanPourGold    int               `json:"maxCanPourGold"` //三公滑杆最大下注倍数
 	RoundType         int               `json:"roundType"`      //轮数 sz
 	ScoreLowLimit     int               `json:"scoreLowLimit"`  //最低分限制
 	ScoreDismissLimit int               `json:"scoreDismissLimit"`
-	RoomPayRule       RoomPayRule       `json:"roomPayRule"`
+	// PDK-specific options are kept in the shared rule because room rules are
+	// decoded before the concrete game frame is created.
+	Bichu           bool        `json:"bichu"`
+	Baiwei          bool        `json:"baiwei"`
+	Chaizhadan      bool        `json:"chaizhadan"`
+	Heitao3         bool        `json:"heitao3"`
+	ShowCardsCount  bool        `json:"showCardsCount"`
+	FourTakeTwo     bool        `json:"fourTakeTwo"`
+	FourTakeThree   bool        `json:"fourTakeThree"`
+	ThreeABomb      bool        `json:"ThreeABomb"`
+	Hongtao10       bool        `json:"hongtao10"`
+	Zhinengshunzi   bool        `json:"zhinengshunzi"`
+	XiaojuTrust     bool        `json:"xiaojuTrust"`
+	BeBankerScores  []int       `json:"beBankerScores"`
+	ScaleType       int         `json:"scaleType"`
+	CardsType       CardTypes   `json:"cardsType"`
+	SendCardType    int         `json:"sendCardType"`
+	RobBankLimit    int         `json:"robBankLimit"`
+	FirstBureauRate float64     `json:"firstBureauRate"`
+	BureauRate      float64     `json:"bureauRate"`
+	Shouzhuang      int         `json:"shouzhuang"`
+	LianzhuangType  int         `json:"lianzhuangType"`
+	LianzhuangCount int         `json:"lianzhuangCount"`
+	Tuizhu          bool        `json:"tuizhu"`
+	TuiScale        []int       `json:"tuiScale"`
+	Xiazhuangfen    int         `json:"xiazhuangfen"`
+	RoomPayRule     RoomPayRule `json:"roomPayRule"`
 }
 
 type RoomPayRule struct {
@@ -111,7 +170,7 @@ func RoomDismissPushData(reason enums.RoomDismissReason) any {
 	return pushMsg
 }
 
-func UserChatPushData(fromChairID int, toChairID int, content string) any {
+func UserChatPushData(fromChairID int, toChairID int, content any) any {
 	pushMsg := map[string]any{
 		"type": UserChatPush,
 		"data": map[string]any{

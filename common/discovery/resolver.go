@@ -4,9 +4,11 @@ import (
 	"common/config"
 	"common/logs"
 	"context"
+	"errors"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"google.golang.org/grpc/attributes"
 	"google.golang.org/grpc/resolver"
+	"sync"
 	"time"
 )
 
@@ -19,6 +21,8 @@ type Resolver struct {
 	cc          resolver.ClientConn
 	srvAddrList []resolver.Address
 	watchCh     clientv3.WatchChan
+	watchCancel context.CancelFunc
+	closeOnce   sync.Once
 }
 
 // Build 当grpc.Dial的时候 就会同步调用此方法
@@ -33,12 +37,14 @@ func (r *Resolver) Build(target resolver.Target, cc resolver.ClientConn, opts re
 		DialTimeout: time.Duration(r.DialTimeout) * time.Second,
 	})
 	if err != nil {
-		logs.Fatal("grpc client connect etcd err:%v", err)
+		logs.Error("grpc client connect etcd err:%v", err)
+		return nil, err
 	}
 	r.closeCh = make(chan struct{})
 	//2.根据key获取value
 	r.key = target.URL.Path
 	if err = r.sync(); err != nil {
+		_ = r.etcdCli.Close()
 		return nil, err
 	}
 	//2. 比如节点有变动了 想要实时的更新信息
@@ -74,8 +80,8 @@ func (r *Resolver) sync() error {
 		})
 	}
 	if len(r.srvAddrList) == 0 {
-		logs.Error("no services found")
-		return nil
+		logs.Error("grpc client found no services, name=%s", r.key)
+		return errors.New("no services found")
 	}
 	err = r.cc.UpdateState(resolver.State{
 		Addresses: r.srvAddrList,
@@ -92,17 +98,20 @@ func (r *Resolver) watch() {
 	//2. 监听节点的事件 从而触发不同的操作
 	//3. 监听Close事件 关闭 etcd
 	ticker := time.NewTicker(time.Minute)
-	r.watchCh = r.etcdCli.Watch(context.Background(), r.key, clientv3.WithPrefix())
+	watchCtx, cancel := context.WithCancel(context.Background())
+	r.watchCancel = cancel
+	r.watchCh = r.etcdCli.Watch(watchCtx, r.key, clientv3.WithPrefix())
+	defer ticker.Stop()
 	for {
 		select {
 		case <-r.closeCh:
 			//close
-			r.Close()
+			return
 		case res, ok := <-r.watchCh:
-			if ok {
-				//
-				r.update(res.Events)
+			if !ok {
+				return
 			}
+			r.update(res.Events)
 
 		case <-ticker.C:
 			if err := r.sync(); err != nil {
@@ -120,6 +129,7 @@ func (r *Resolver) update(events []*clientv3.Event) {
 			server, err := ParseValue(ev.Kv.Value)
 			if err != nil {
 				logs.Error("grpc client update(EventTypePut) parse etcd value failed, name=%s,err:%v", r.key, err)
+				continue
 			}
 			addr := resolver.Address{
 				Addr:       server.Addr,
@@ -140,6 +150,7 @@ func (r *Resolver) update(events []*clientv3.Event) {
 			server, err := ParseKey(string(ev.Kv.Key))
 			if err != nil {
 				logs.Error("grpc client update(EventTypeDelete) parse etcd value failed, name=%s,err:%v", r.key, err)
+				continue
 			}
 			addr := resolver.Address{Addr: server.Addr}
 			//r.srvAddrList remove操作
@@ -157,13 +168,20 @@ func (r *Resolver) update(events []*clientv3.Event) {
 }
 
 func (r *Resolver) Close() {
-	if r.etcdCli != nil {
-		err := r.etcdCli.Close()
-		if err != nil {
-			logs.Error("Resolver close etcd err:%v", err)
+	r.closeOnce.Do(func() {
+		if r.closeCh != nil {
+			close(r.closeCh)
 		}
-		logs.Info("close etcd...")
-	}
+		if r.watchCancel != nil {
+			r.watchCancel()
+		}
+		if r.etcdCli != nil {
+			if err := r.etcdCli.Close(); err != nil {
+				logs.Error("Resolver close etcd err:%v", err)
+			}
+			logs.Info("close etcd...")
+		}
+	})
 }
 
 func Exist(list []resolver.Address, addr resolver.Address) bool {

@@ -14,6 +14,9 @@ func Register(r *repo.Manager) node.LogicHandler {
 	handlers["userHandler.authRealName"] = userHandler.AuthRealName
 	handlers["userHandler.searchByPhone"] = userHandler.SearchByPhone
 	handlers["userHandler.searchUserData"] = userHandler.SearchUserData
+	handlers["emailHandler.readEmail"] = userHandler.ReadEmail
+	handlers["emailHandler.deleteEmail"] = userHandler.DeleteEmail
+	handlers["emailHandler.sendCustomerServiceMsg"] = userHandler.SendCustomerServiceMsg
 	unionHandler := handler.NewUnionHandler(r)
 	handlers["unionHandler.createUnion"] = unionHandler.CreateUnion
 	handlers["unionHandler.getUserUnionList"] = unionHandler.GetUserUnionList

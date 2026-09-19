@@ -1,4 +1,3 @@
-version: "3.5"
 services:
   nats:
     container_name: nats-qp
@@ -36,7 +35,7 @@ services:
     privileged: true  # 设置容器的权限为root
     environment:
       MONGO_INITDB_ROOT_USERNAME: root  # 账号
-      MONGO_INITDB_ROOT_PASSWORD: mszlu!@#987432@#
+      MONGO_INITDB_ROOT_PASSWORD: root123456
   Redis:
     container_name: redis6-qp
     image: redis:${REDIS_VERSION}

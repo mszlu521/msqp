@@ -18,7 +18,7 @@ type GameFrame struct {
 	gameRule                proto.GameRule
 	gameData                *GameData
 	UserWinRecord           map[string]*UserWinRecord
-	ReviewRecord            []*BureauReview
+	ReviewRecord            [][]*BureauReview
 	logic                   *Logic
 	gameResult              *GameResult
 	pourScoreScheduleID     *tasks.Task
@@ -28,6 +28,8 @@ type GameFrame struct {
 	sendCardsScheduleID     *time.Timer
 	compareID               *time.Timer
 	endResultID             *time.Timer
+	abandonID               *time.Timer
+	isDismissed             bool
 	stopPourScoreScheduleID chan struct{}
 	stopForcePrepareID      chan struct{}
 }
@@ -37,7 +39,7 @@ func (g *GameFrame) GetGameBureauData() any {
 }
 
 func (g *GameFrame) GetGameVideoData() any {
-	return nil
+	return g.ReviewRecord
 }
 
 type DismissResult struct {
@@ -48,6 +50,7 @@ type DismissResult struct {
 }
 
 func (g *GameFrame) OnEventRoomDismiss(reason enums.RoomDismissReason, session *remote.Session) {
+	g.isDismissed = true
 	g.delScheduleIDs()
 	var result = make([]*DismissResult, 0)
 	for _, v := range g.UserWinRecord {
@@ -92,7 +95,7 @@ func (g *GameFrame) OnEventGameStart(user *proto.RoomUser, session *remote.Sessi
 }
 
 func (g *GameFrame) OnEventUserEntry(user *proto.RoomUser, session *remote.Session) {
-	//TODO implement me
+	// The room scene response already contains the reconnect snapshot.
 }
 
 func (g *GameFrame) sendData(data any, users []string, session *remote.Session) {
@@ -103,7 +106,7 @@ func (g *GameFrame) sendDataAll(data any, session *remote.Session) {
 }
 
 func (g *GameFrame) OnEventUserOffLine(user *proto.RoomUser, session *remote.Session) {
-	if g.gameData.CurChairID == user.ChairID {
+	if g.isUserPlaying(user) && g.gameData.CurChairID == user.ChairID {
 		g.offlineUserAutoOperation(user, session)
 	}
 }
@@ -119,7 +122,12 @@ func (g *GameFrame) IsUserEnableLeave(chairID int) bool {
 func (g *GameFrame) GameMessageHandle(user *proto.RoomUser, session *remote.Session, msg []byte) {
 	//1. 解析参数
 	var req MessageReq
-	json.Unmarshal(msg, &req)
+	if err := json.Unmarshal(msg, &req); err != nil || user == nil {
+		return
+	}
+	if req.Type != GameChatNotify && req.Type != GameReviewNotify && !g.isUserPlaying(user) {
+		return
+	}
 	//2. 根据不同的类型 触发不同的操作
 	if req.Type == GameLookNotify {
 		g.onGameLook(user, req.Data.Cuopai, true, session)
@@ -145,7 +153,7 @@ func NewGameFrame(rule proto.GameRule, r base.RoomFrame, session *remote.Session
 		gameRule:                rule,
 		gameData:                gameData,
 		UserWinRecord:           make(map[string]*UserWinRecord),
-		ReviewRecord:            make([]*BureauReview, 0),
+		ReviewRecord:            make([][]*BureauReview, 0),
 		logic:                   NewLogic(),
 		stopPourScoreScheduleID: make(chan struct{}, 1),
 		stopForcePrepareID:      make(chan struct{}, 1),
@@ -157,9 +165,10 @@ func NewGameFrame(rule proto.GameRule, r base.RoomFrame, session *remote.Session
 
 func initGameData(rule proto.GameRule) *GameData {
 	g := &GameData{
-		GameType:   GameType(rule.GameFrameType),
-		BaseScore:  rule.BaseScore,
-		ChairCount: rule.MaxPlayerCount,
+		GameType:    GameType(rule.GameFrameType),
+		BaseScore:   rule.BaseScore,
+		ChairCount:  rule.MaxPlayerCount,
+		SelfChairID: -1,
 	}
 	g.PourScores = make([][]int, g.ChairCount)
 	g.HandCards = make([][]int, g.ChairCount)
@@ -174,11 +183,21 @@ func initGameData(rule proto.GameRule) *GameData {
 }
 
 func (g *GameFrame) GetEnterGameData(session *remote.Session) any {
+	if session == nil {
+		return nil
+	}
 	user := g.r.GetUsers()[session.GetUid()]
+	if user == nil {
+		return nil
+	}
 	//判断当前用户 是否是已经看牌 如果已经看牌 返回牌 但是对其他用户仍旧是隐藏状态
 	//深拷贝
 	var gameData GameData
 	copier.CopyWithOption(&gameData, g.gameData, copier.Option{DeepCopy: true})
+	gameData.SelfChairID = -1
+	if user.ChairID >= 0 && user.ChairID < gameData.ChairCount {
+		gameData.SelfChairID = user.ChairID
+	}
 	gameData.CurScores = g.getCurScores()
 	if g.gameData.GameStatus != Result {
 		handCards := make([][]int, g.gameData.ChairCount)
@@ -189,7 +208,7 @@ func (g *GameFrame) GetEnterGameData(session *remote.Session) any {
 				handCards[i] = nil
 			}
 		}
-		if user.ChairID < len(g.gameData.LookCards) {
+		if user.ChairID >= 0 && user.ChairID < len(g.gameData.LookCards) {
 			//确保数据正确
 			if g.gameData.LookCards[user.ChairID] != 0 {
 				handCards[user.ChairID] = g.gameData.HandCards[user.ChairID]
@@ -212,19 +231,21 @@ func (g *GameFrame) startGame(session *remote.Session) {
 	}
 	if g.gameRule.CanTrust && g.userTrustID == nil {
 		g.userTrustID = tasks.NewTask("userTrustID", time.Second, func() {
-			if g.r.IsDismissing() {
-				return
-			}
-			for _, u := range g.r.GetUsers() {
-				if u.ChairID == g.gameData.CurChairID &&
-					!g.gameData.UserTrustArray[u.ChairID] &&
-					g.gameData.GameStatus == PourScore {
-					g.gameData.TrustTmArray[u.ChairID]++
-					if g.gameData.TrustTmArray[u.ChairID] >= 30 {
-						g.onGameTrust(u, true, session)
+			g.r.RunGameAction(func() {
+				if g.r.IsDismissing() {
+					return
+				}
+				for _, u := range g.r.GetUsers() {
+					if u.ChairID == g.gameData.CurChairID &&
+						!g.gameData.UserTrustArray[u.ChairID] &&
+						g.gameData.GameStatus == PourScore {
+						g.gameData.TrustTmArray[u.ChairID]++
+						if g.gameData.TrustTmArray[u.ChairID] >= 30 {
+							g.onGameTrust(u, true, session)
+						}
 					}
 				}
-			}
+			})
 		})
 	}
 	if g.r.GetCurBureau() == 0 {
@@ -413,16 +434,8 @@ func (g *GameFrame) onGamePourScore(chairID int,
 	if score > 0 {
 		scores := 0
 		chairScore := 0
-		for i := 0; i < g.gameData.ChairCount; i++ {
-			if g.gameData.PourScores[i] != nil {
-				for sc := range g.gameData.PourScores[i] {
-					scores += sc
-				}
-			}
-		}
-		for sc := range g.gameData.PourScores[user.ChairID] {
-			chairScore += sc
-		}
+		scores = totalPourScores(g.gameData.PourScores)
+		chairScore = sumScores(g.gameData.PourScores[user.ChairID])
 		g.sendDataAll(GamePourScorePushData(user.ChairID, score, chairScore, scores, types), session)
 	}
 	if !fromCompare {
@@ -577,7 +590,12 @@ func (g *GameFrame) onGameCompare(fromChairID int, toChairID int, fromEnd, force
 			g.compareID.Stop()
 		}
 		g.compareID = time.AfterFunc(3*time.Second, func() {
-			g.endPourScore((winChairID == fromChairID) && force, session)
+			g.r.RunGameAction(func() {
+				if g.isDismissed {
+					return
+				}
+				g.endPourScore((winChairID == fromChairID) && force, session)
+			})
 		})
 	}
 }
@@ -624,19 +642,7 @@ func (g *GameFrame) startResult(session *remote.Session) {
 		}
 	}
 	winners := append(heChairIDs, gamerChairIDs...)
-	winScores := make([]int, g.gameData.ChairCount)
-	for i, v := range g.gameData.PourScores {
-		if v != nil && utils.IndexOf(winners, i) == -1 {
-			scores := 0
-			for score := range v {
-				scores += score
-			}
-			winScores[i] = -scores
-			for winner := range winners {
-				winScores[winner] += scores / len(winners)
-			}
-		}
-	}
+	winScores := settleScores(g.gameData.PourScores, winners, g.gameData.ChairCount)
 	for i := 0; i < len(winScores); i++ {
 		user := g.getUserByChairID(i)
 		if winScores[i] != 0 && user != nil {
@@ -658,6 +664,7 @@ func (g *GameFrame) startResult(session *remote.Session) {
 		CurScores: g.getCurScores(),
 	}
 	g.gameResult = result
+	g.gameData.Result = result
 	g.sendDataAll(GameResultPushData(result), session)
 	var bureauReviews []*BureauReview
 	//牌面回顾记录
@@ -665,10 +672,7 @@ func (g *GameFrame) startResult(session *remote.Session) {
 		if !g.IsPlayingChairID(user.ChairID) {
 			continue
 		}
-		pourScore := 0
-		for score := range g.gameData.PourScores[user.ChairID] {
-			pourScore += score
-		}
+		pourScore := sumScores(g.gameData.PourScores[user.ChairID])
 		bureauReview := &BureauReview{
 			Uid:       user.UserInfo.Uid,
 			Nickname:  user.UserInfo.Nickname,
@@ -681,23 +685,77 @@ func (g *GameFrame) startResult(session *remote.Session) {
 		}
 		bureauReviews = append(bureauReviews, bureauReview)
 	}
-	g.ReviewRecord = append(g.ReviewRecord, bureauReviews...)
+	g.ReviewRecord = append(g.ReviewRecord, bureauReviews)
 	if g.endResultID != nil {
 		g.endResultID.Stop()
 		g.endResultID = nil
 	}
 	g.endResultID = time.AfterFunc(3*time.Second, func() {
-		g.endResult(session)
+		g.r.RunGameAction(func() {
+			if g.isDismissed {
+				return
+			}
+			g.endResult(session)
+		})
 	})
 }
 
+func sumScores(scores []int) int {
+	total := 0
+	for _, score := range scores {
+		total += score
+	}
+	return total
+}
+
+func totalPourScores(pourScores [][]int) int {
+	total := 0
+	for _, scores := range pourScores {
+		total += sumScores(scores)
+	}
+	return total
+}
+
+func settleScores(pourScores [][]int, winners []int, chairCount int) []int {
+	result := make([]int, chairCount)
+	validWinners := make([]int, 0, len(winners))
+	isWinner := make([]bool, chairCount)
+	for _, chairID := range winners {
+		if chairID >= 0 && chairID < chairCount && !isWinner[chairID] {
+			isWinner[chairID] = true
+			validWinners = append(validWinners, chairID)
+		}
+	}
+	if len(validWinners) == 0 {
+		return result
+	}
+	for chairID := 0; chairID < chairCount && chairID < len(pourScores); chairID++ {
+		if isWinner[chairID] {
+			continue
+		}
+		lost := sumScores(pourScores[chairID])
+		result[chairID] = -lost
+		share, remainder := lost/len(validWinners), lost%len(validWinners)
+		for index, winner := range validWinners {
+			result[winner] += share
+			if index < remainder {
+				result[winner]++
+			}
+		}
+	}
+	return result
+}
+
 func (g *GameFrame) resetGame(session *remote.Session) {
+	g.gameData.GameStarter = false
 	g.gameData.GameStatus = GameStatusNone
 	g.gameData.Tick = 0
+	g.gameData.Result = nil
 	g.gameData.HandCards = make([][]int, g.gameData.ChairCount)
 	g.gameData.PourScores = make([][]int, g.gameData.ChairCount)
 	g.gameData.LookCards = make([]int, g.gameData.ChairCount)
 	g.gameData.Loser = make([]int, 0)
+	g.gameData.Winner = make([]int, 0)
 	g.gameData.UserStatusArray = make([]UserStatus, g.gameData.ChairCount)
 	g.gameData.Round = 0
 	g.SendGameStatus(session)
@@ -730,27 +788,29 @@ func (g *GameFrame) gameEnd(session *remote.Session) {
 			g.forcePrepareID = nil
 		}
 		g.forcePrepareID = tasks.NewTask("forcePrepareID", 1*time.Second, func() {
-			if g.r.IsDismissing() {
-				return
-			}
-			g.gameData.Tick--
-			if g.gameData.Tick <= 0 {
-				if g.gameData.GameStatus == GameStatusNone {
-					for _, user := range g.r.GetUsers() {
-						if user.UserStatus&enums.Ready > 0 {
-							//手动准备过，倒计时清零
-							g.gameData.TrustTmArray[user.ChairID] = 0
-						}
-						if user.ChairID < g.gameData.ChairCount &&
-							user.UserStatus&enums.Ready == 0 &&
-							g.gameData.GameStatus == GameStatusNone &&
-							!g.gameData.GameStarter {
-							g.r.UserReady(user.UserInfo.Uid, session)
+			g.r.RunGameAction(func() {
+				if g.r.IsDismissing() {
+					return
+				}
+				g.gameData.Tick--
+				if g.gameData.Tick <= 0 {
+					if g.gameData.GameStatus == GameStatusNone {
+						for _, user := range g.r.GetUsers() {
+							if user.UserStatus&enums.Ready > 0 {
+								//手动准备过，倒计时清零
+								g.gameData.TrustTmArray[user.ChairID] = 0
+							}
+							if user.ChairID < g.gameData.ChairCount &&
+								user.UserStatus&enums.Ready == 0 &&
+								g.gameData.GameStatus == GameStatusNone &&
+								!g.gameData.GameStarter {
+								g.r.UserReady(user.UserInfo.Uid, session)
+							}
 						}
 					}
+					g.stopForcePrepareID <- struct{}{}
 				}
-				g.stopForcePrepareID <- struct{}{}
-			}
+			})
 		})
 	}
 }
@@ -775,8 +835,16 @@ func (g *GameFrame) onGameAbandon(chairID int, types int, fromUser bool, session
 	}
 	g.gameData.Loser = append(g.gameData.Loser, chairID)
 	g.sendDataAll(GameAbandonPushData(chairID, g.gameData.UserStatusArray[chairID], types), session)
-	time.AfterFunc(time.Second, func() {
-		g.endPourScore(false, session)
+	if g.abandonID != nil {
+		g.abandonID.Stop()
+	}
+	g.abandonID = time.AfterFunc(time.Second, func() {
+		g.r.RunGameAction(func() {
+			if g.isDismissed {
+				return
+			}
+			g.endPourScore(false, session)
+		})
 	})
 }
 
@@ -796,11 +864,11 @@ func (g *GameFrame) getCurScores() []int {
 }
 
 func (g *GameFrame) onGameChat(user *proto.RoomUser, data MessageData, session *remote.Session) {
-	g.sendDataAll(gameChatPushData(user.ChairID, data.Type, data.Msg, data.RecipientID), session)
+	g.sendDataAll(gameChatPushData(user.ChairID, data.Type, data.Msg.Value(), data.RecipientID), session)
 }
 
 func (g *GameFrame) onGameTrust(user *proto.RoomUser, trust bool, session *remote.Session) {
-	if user.ChairID >= g.gameData.ChairCount {
+	if !g.gameRule.CanTrust || user.ChairID < 0 || user.ChairID >= g.gameData.ChairCount {
 		return
 	}
 	g.gameData.UserTrustArray[user.ChairID] = trust
@@ -827,7 +895,7 @@ func (g *GameFrame) onGameReview(user *proto.RoomUser, session *remote.Session) 
 }
 
 func (g *GameFrame) isUserPlaying(user *proto.RoomUser) bool {
-	if user != nil && (user.UserStatus&enums.Ready > 0 || user.UserStatus&enums.Playing > 0) {
+	if user != nil && user.ChairID >= 0 && user.ChairID < g.gameData.ChairCount && (user.UserStatus&enums.Ready > 0 || user.UserStatus&enums.Playing > 0) {
 		return true
 	}
 	return false
@@ -881,13 +949,15 @@ func (g *GameFrame) startPourScore(session *remote.Session) {
 		g.pourScoreScheduleID = nil
 	}
 	g.pourScoreScheduleID = tasks.NewTask("pourScoreScheduleID", 1*time.Second, func() {
-		if g.r.IsDismissing() {
-			return
-		}
-		g.gameData.Tick--
-		if g.gameData.Tick <= 0 {
-			g.onGameAbandon(g.gameData.CurChairID, 1, false, session)
-		}
+		g.r.RunGameAction(func() {
+			if g.r.IsDismissing() {
+				return
+			}
+			g.gameData.Tick--
+			if g.gameData.Tick <= 0 {
+				g.onGameAbandon(g.gameData.CurChairID, 1, false, session)
+			}
+		})
 	})
 	g.SendGameStatus(session)
 	g.sendDataAll(GameTurnPushData(g.gameData.CurChairID, g.gameData.CurScore), session)
@@ -897,12 +967,17 @@ func (g *GameFrame) startPourScore(session *remote.Session) {
 		g.startPourScoreID = nil
 	}
 	g.startPourScoreID = time.AfterFunc(time.Second, func() {
-		if g.gameData.GameStatus == PourScore &&
-			g.gameData.UserTrustArray[chairID] &&
-			g.gameData.CurChairID == chairID {
-			g.stopPourScoreScheduleID <- struct{}{}
-			g.onGameAbandon(g.gameData.CurChairID, 1, false, session)
-		}
+		g.r.RunGameAction(func() {
+			if g.isDismissed {
+				return
+			}
+			if g.gameData.GameStatus == PourScore &&
+				g.gameData.UserTrustArray[chairID] &&
+				g.gameData.CurChairID == chairID {
+				g.stopPourScoreScheduleID <- struct{}{}
+				g.onGameAbandon(g.gameData.CurChairID, 1, false, session)
+			}
+		})
 	})
 }
 
@@ -919,10 +994,28 @@ func (g *GameFrame) delScheduleIDs() {
 		g.pourScoreScheduleID.Stop()
 		g.pourScoreScheduleID = nil
 	}
+	for _, timer := range []**time.Timer{
+		&g.startPourScoreID,
+		&g.sendCardsScheduleID,
+		&g.compareID,
+		&g.endResultID,
+		&g.abandonID,
+	} {
+		if *timer != nil {
+			(*timer).Stop()
+			*timer = nil
+		}
+	}
 }
 
 func (g *GameFrame) offlineUserAutoOperation(user *proto.RoomUser, session *remote.Session) {
-	//TODO
+	if user == nil || g.gameData.GameStatus != PourScore || g.gameData.CurChairID != user.ChairID {
+		return
+	}
+	// A disconnected player must not hold the betting turn until the long
+	// timeout task fires. Mark it as an automatic fold and let the normal
+	// transition code continue the round.
+	g.onGameAbandon(user.ChairID, AbandonTypeAbandon, false, session)
 }
 
 func (g *GameFrame) startSendCards(session *remote.Session) {
@@ -933,7 +1026,12 @@ func (g *GameFrame) startSendCards(session *remote.Session) {
 		g.sendCardsScheduleID = nil
 	}
 	g.sendCardsScheduleID = time.AfterFunc(time.Duration(TmSendCards)*time.Second, func() {
-		g.endSendCards(session)
+		g.r.RunGameAction(func() {
+			if g.isDismissed {
+				return
+			}
+			g.endSendCards(session)
+		})
 	})
 	g.logic.washCards()
 	for i := 0; i < g.gameData.ChairCount; i++ {

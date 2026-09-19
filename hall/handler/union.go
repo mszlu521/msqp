@@ -16,11 +16,13 @@ import (
 	"framework/game"
 	"framework/remote"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"hall/models/request"
 	"hall/models/response"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -40,7 +42,8 @@ func (h *UnionHandler) CreateUnion(session *remote.Session, msg []byte) any {
 		return common.F(biz.RequestDataError)
 	}
 	//长度限制一下
-	if len(req.UnionName) > 60 {
+	req.UnionName = strings.TrimSpace(req.UnionName)
+	if req.UnionName == "" || len(req.UnionName) > 60 {
 		return common.F(biz.RequestDataError)
 	}
 	user, err := h.userDao.FindUserByUid(context.TODO(), session.GetUid())
@@ -56,10 +59,27 @@ func (h *UnionHandler) CreateUnion(session *remote.Session, msg []byte) any {
 	if !user.IsAgent {
 		return common.F(biz.RequestDataError)
 	}
-	unionConfig := game.Conf.GameConfig["unionConfig"]
-	valueMap := unionConfig["value"].(map[string]any)
-	userMaxUnionCount := int(valueMap["userMaxUnionCount"].(float64))
-	if len(user.UnionInfo) > userMaxUnionCount {
+	if game.Conf == nil {
+		logs.Error("[UnionHandler] CreateUnion invalid unionConfig")
+		return common.F(biz.RequestDataError)
+	}
+	unionConfig, ok := game.Conf.GameConfig["unionConfig"]
+	if !ok {
+		logs.Error("[UnionHandler] CreateUnion invalid unionConfig")
+		return common.F(biz.RequestDataError)
+	}
+	valueMap, ok := unionConfig["value"].(map[string]any)
+	if !ok {
+		logs.Error("[UnionHandler] CreateUnion invalid unionConfig.value")
+		return common.F(biz.RequestDataError)
+	}
+	maxUnionCount, ok := valueMap["userMaxUnionCount"].(float64)
+	if !ok || maxUnionCount < 0 || math.Trunc(maxUnionCount) != maxUnionCount {
+		logs.Error("[UnionHandler] CreateUnion invalid userMaxUnionCount")
+		return common.F(biz.RequestDataError)
+	}
+	userMaxUnionCount := int(maxUnionCount)
+	if len(user.UnionInfo) >= userMaxUnionCount {
 		return common.F(biz.RequestDataError)
 	}
 	// 判断是否已经创建过牌友圈，如果已经创建过，则无法重复创建
@@ -116,11 +136,7 @@ func (h *UnionHandler) CreateUnion(session *remote.Session, msg []byte) any {
 	}
 	res := &response.CreateUnionResp{}
 	res.Code = biz.OK
-	res.UpdateUserData = map[string]any{
-		"updateUserData": map[string]any{
-			"unionInfo": newUserData.UnionInfo,
-		},
-	}
+	res.UpdateUserData = unionInfoUpdateUserData(newUserData.UnionInfo)
 	res.Msg = map[string]any{
 		"unionID": union.UnionID,
 	}
@@ -133,10 +149,10 @@ func (h *UnionHandler) JoinUnion(session *remote.Session, msg []byte) any {
 	if err := json.Unmarshal(msg, &req); err != nil {
 		return common.F(biz.RequestDataError)
 	}
-	if req.InviteID == "" {
-		return common.F(biz.RequestDataError)
+	inviteID, ok := parseInviteID(req.InviteID)
+	if !ok {
+		return common.F(biz.InviteIdError)
 	}
-	inviteID, _ := strconv.ParseInt(req.InviteID, 10, 64)
 	inviteUserData, err := h.userDao.FindUserByInviteID(context.Background(), inviteID)
 	if err != nil {
 		logs.Error("[UnionHandler] JoinUnion find user by invite id err:%v", err)
@@ -152,6 +168,9 @@ func (h *UnionHandler) JoinUnion(session *remote.Session, msg []byte) any {
 			break
 		}
 	}
+	if inviteUnionInfo == nil {
+		return common.F(biz.InviteIdError)
+	}
 	unionData, err := h.unionDao.FindUnionByUnionID(context.Background(), inviteUnionInfo.UnionID)
 	if err != nil {
 		logs.Error("[UnionHandler] JoinUnion find union err:%v", err)
@@ -165,6 +184,9 @@ func (h *UnionHandler) JoinUnion(session *remote.Session, msg []byte) any {
 	}
 	userData, err := h.userDao.FindUserByUid(context.Background(), session.GetUid())
 	if err != nil {
+		return common.F(biz.InvalidUsers)
+	}
+	if userData == nil {
 		return common.F(biz.InvalidUsers)
 	}
 	for _, v := range userData.UnionInfo {
@@ -202,15 +224,27 @@ func (h *UnionHandler) JoinUnion(session *remote.Session, msg []byte) any {
 	}
 	res := &response.JoinUnionResp{}
 	res.Code = biz.OK
-	res.UpdateUserData = map[string]any{
-		"updateUserData": map[string]any{
-			"unionInfo": newUserData.UnionInfo,
-		},
-	}
+	res.UpdateUserData = unionInfoUpdateUserData(newUserData.UnionInfo)
 	res.Msg = map[string]any{
 		"unionID": inviteUnionInfo.UnionID,
 	}
 	return res
+}
+
+func parseInviteID(value string) (int64, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, false
+	}
+	return id, true
+}
+
+func unionInfoUpdateUserData(unionInfo any) map[string]any {
+	return map[string]any{"unionInfo": unionInfo}
 }
 
 // ExitUnion 退出联盟
@@ -315,6 +349,9 @@ func (h *UnionHandler) GetUserUnionList(session *remote.Session, msg []byte) any
 	if err != nil {
 		return common.F(biz.InvalidUsers)
 	}
+	if user == nil {
+		return common.F(biz.InvalidUsers)
+	}
 	var unionIDList []int64
 	for _, v := range user.UnionInfo {
 		unionIDList = append(unionIDList, v.UnionID)
@@ -355,11 +392,12 @@ func (h *UnionHandler) GetMemberList(session *remote.Session, msg []byte) any {
 	if req.UnionID <= 0 {
 		return common.F(biz.RequestDataError)
 	}
+	memberMatch := mergeBsonMatch(req.MatchData, bson.M{"unionInfo.unionID": req.UnionID})
 	list, total, err := h.userDao.FindUserPage(context.Background(), req.StartIndex, req.Count, bson.M{
 		"roomID":          -1,
 		"frontendId":      -1,
 		"unionInfo.score": -1,
-	}, req.MatchData)
+	}, memberMatch)
 	if err != nil {
 		logs.Error("[UnionHandler] GetMemberList find user page err:%v", err)
 		return common.F(biz.SqlError)
@@ -378,7 +416,7 @@ func (h *UnionHandler) GetMemberList(session *remote.Session, msg []byte) any {
 			}
 		}
 		if unionInfoItem == nil {
-			return common.F(biz.RequestDataError)
+			continue
 		}
 		memberList = append(memberList, &response.UnionMember{
 			Uid:                       v.Uid,
@@ -419,15 +457,17 @@ func (h *UnionHandler) GetMemberStatisticsInfo(session *remote.Session, msg []by
 	if req.UnionID <= 0 {
 		return common.F(biz.RequestDataError)
 	}
+	memberMatch := mergeBsonMatch(req.MatchData, bson.M{"unionInfo.unionID": req.UnionID})
 	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: memberMatch}},
 		// Unwind the unionInfo array
-		{{"$unwind", "$unionInfo"}},
+		{{Key: "$unwind", Value: "$unionInfo"}},
 
 		// Match the given conditions (msg.matchData)
-		{{"$match", req.MatchData}},
+		{{Key: "$match", Value: bson.M{"unionInfo.unionID": req.UnionID}}},
 
 		// Group by _id and aggregate the data
-		{{"$group", bson.M{
+		{{Key: "$group", Value: bson.M{
 			"_id":                         nil, // Grouping by null to get a single document
 			"yesterdayTotalDraw":          bson.M{"$sum": "$unionInfo.yesterdayDraw"},
 			"yesterdayTotalProvideRebate": bson.M{"$sum": "$unionInfo.yesterdayProvideRebate"},
@@ -461,9 +501,10 @@ func (h *UnionHandler) GetMemberScoreList(session *remote.Session, msg []byte) a
 	if req.UnionID <= 0 {
 		return common.F(biz.RequestDataError)
 	}
+	memberMatch := mergeBsonMatch(req.MatchData, bson.M{"unionInfo.unionID": req.UnionID})
 	list, total, err := h.userDao.FindUserPage(context.Background(), req.StartIndex, req.Count, bson.M{
 		"unionInfo.score": -1,
-	}, req.MatchData)
+	}, memberMatch)
 	if err != nil {
 		logs.Error("[UnionHandler] GetMemberScoreList find user page err:%v", err)
 		return common.F(biz.SqlError)
@@ -477,6 +518,9 @@ func (h *UnionHandler) GetMemberScoreList(session *remote.Session, msg []byte) a
 				break
 			}
 		}
+		if unionInfoItem == nil {
+			continue
+		}
 		memberList = append(memberList, &response.MemberScoreRecord{
 			Uid:       v.Uid,
 			Nickname:  v.Nickname,
@@ -486,14 +530,15 @@ func (h *UnionHandler) GetMemberScoreList(session *remote.Session, msg []byte) a
 		})
 	}
 	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: memberMatch}},
 		// Unwind the unionInfo array
-		{{"$unwind", "$unionInfo"}},
+		{{Key: "$unwind", Value: "$unionInfo"}},
 
-		// Match the given conditions (msg.matchData)
-		{{"$match", req.MatchData}},
+		// Keep only the requested union after unwinding the array.
+		{{Key: "$match", Value: bson.M{"unionInfo.unionID": req.UnionID}}},
 
 		// Group by _id and aggregate the data
-		{{"$group", bson.M{
+		{{Key: "$group", Value: bson.M{
 			"_id":       nil, // Grouping by null to get a single document
 			"score":     bson.M{"$sum": "$unionInfo.score"},
 			"safeScore": bson.M{"$sum": "$unionInfo.safeScore"},
@@ -661,7 +706,7 @@ func (h *UnionHandler) ModifyScore(session *remote.Session, msg []byte) any {
 	if err := json.Unmarshal(msg, &req); err != nil {
 		return common.F(biz.RequestDataError)
 	}
-	if req.UnionID <= 0 || req.MemberUid == "" || req.Count <= 0 {
+	if !validModifyScoreRequest(req) {
 		return common.F(biz.RequestDataError)
 	}
 	unionData, err := h.unionDao.FindUnionByUnionID(context.Background(), req.UnionID)
@@ -862,6 +907,10 @@ func (h *UnionHandler) ModifyScore(session *remote.Session, msg []byte) any {
 	return res
 }
 
+func validModifyScoreRequest(req request.ModifyScoreReq) bool {
+	return req.UnionID > 0 && req.MemberUid != "" && req.Count != 0
+}
+
 // AddPartner 添加合伙人
 func (h *UnionHandler) AddPartner(session *remote.Session, msg []byte) any {
 	var req request.AddPartnerReq
@@ -946,11 +995,15 @@ func (h *UnionHandler) GetScoreModifyRecord(session *remote.Session, msg []byte)
 	if err := json.Unmarshal(msg, &req); err != nil {
 		return common.F(biz.RequestDataError)
 	}
+	matchData := bson.M{"unionID": req.UnionID}
+	for key, value := range req.MatchData {
+		matchData[key] = value
+	}
 	recordPage, total, err := h.recordDao.FindScoreModifyRecordPage(
 		context.Background(),
 		req.StartIndex,
 		req.Count,
-		bson.M{"createTime": -1}, req.MatchData)
+		bson.M{"createTime": -1}, matchData)
 	if err != nil {
 		logs.Error("[UnionHandler] GetScoreModifyRecord err:%v", err)
 		return common.F(biz.SqlError)
@@ -963,12 +1016,12 @@ func (h *UnionHandler) GetScoreModifyRecord(session *remote.Session, msg []byte)
 	execData := mongo.Pipeline{
 		{
 			{
-				"$match", req.MatchData,
+				Key: "$match", Value: matchData,
 			},
 		},
 		{
 			{
-				"$group", bson.M{
+				Key: "$group", Value: bson.M{
 					"_id":        nil,
 					"totalCount": bson.M{"$sum": "$count"},
 				},
@@ -981,20 +1034,22 @@ func (h *UnionHandler) GetScoreModifyRecord(session *remote.Session, msg []byte)
 		totalScoreCount = statisticsInfo[0].TotalCount
 	}
 	var yesterdayTotalCount int64
-	newMatchData := req.MatchData
+	now := time.Now()
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	newMatchData := cloneBsonMatch(matchData)
 	newMatchData["createTime"] = bson.M{
-		"$gte": time.Now().UnixMilli() - 86400,
-		"$lt":  time.Now().UnixMilli(),
+		"$gte": todayStart.Add(-24 * time.Hour).UnixMilli(),
+		"$lt":  todayStart.UnixMilli(),
 	}
 	execData = mongo.Pipeline{
 		{
 			{
-				"$match", newMatchData,
+				Key: "$match", Value: newMatchData,
 			},
 		},
 		{
 			{
-				"$group", bson.M{
+				Key: "$group", Value: bson.M{
 					"_id":        nil,
 					"totalCount": bson.M{"$sum": "$count"},
 				},
@@ -1002,24 +1057,25 @@ func (h *UnionHandler) GetScoreModifyRecord(session *remote.Session, msg []byte)
 		},
 	}
 	var statisticsInfo1 []*entity.StatisticsResult
-	err = h.commonDao.GetStatisticsInfo(context.Background(), "scoreModifyRecord", execData, &statisticsInfo)
+	err = h.commonDao.GetStatisticsInfo(context.Background(), "scoreModifyRecord", execData, &statisticsInfo1)
 	if err == nil && len(statisticsInfo1) > 0 {
 		yesterdayTotalCount = statisticsInfo1[0].TotalCount
 	}
 	var todayTotalCount int64
-	newMatchData = req.MatchData
+	newMatchData = cloneBsonMatch(matchData)
 	newMatchData["createTime"] = bson.M{
-		"$gte": time.Now().UnixMilli(),
+		"$gte": todayStart.UnixMilli(),
+		"$lt":  todayStart.Add(24 * time.Hour).UnixMilli(),
 	}
 	execData = mongo.Pipeline{
 		{
 			{
-				"$match", newMatchData,
+				Key: "$match", Value: newMatchData,
 			},
 		},
 		{
 			{
-				"$group", bson.M{
+				Key: "$group", Value: bson.M{
 					"_id":        nil,
 					"totalCount": bson.M{"$sum": "$count"},
 				},
@@ -1156,6 +1212,9 @@ func (h *UnionHandler) OperationInviteJoinUnion(session *remote.Session, msg []b
 	if err != nil {
 		logs.Error("[UnionHandler] OperationInviteJoinUnion find user err:%v", err)
 		return common.F(biz.SqlError)
+	}
+	if userData == nil {
+		return common.F(biz.InvalidUsers)
 	}
 	var inviteMsgItem *entity.InviteMsg
 	if userData.InviteMsg == nil {
@@ -1327,7 +1386,7 @@ func (h *UnionHandler) UpdateUnionRebate(session *remote.Session, msg []byte) an
 	if err := json.Unmarshal(msg, &req); err != nil {
 		return common.F(biz.RequestDataError)
 	}
-	if req.MemberUid != "" || req.RebateRate > 1 || req.RebateRate < 0 {
+	if req.MemberUid == "" || req.UnionID <= 0 || req.MemberUid == session.GetUid() || req.RebateRate > 1 || req.RebateRate < 0 {
 		return common.F(biz.RequestDataError)
 	}
 	// 查询联盟数据
@@ -1511,6 +1570,8 @@ func (h *UnionHandler) GiveScore(session *remote.Session, msg []byte) any {
 		}, saveData)
 		if err != nil {
 			logs.Error("[UnionHandler] GiveScore find and updateerr:%v", err)
+			h.userDao.UnLockUserData(context.Background(), session.GetUid())
+			return common.F(biz.SqlError)
 		}
 	} else {
 		// 盟主时，不需要修改
@@ -1527,6 +1588,10 @@ func (h *UnionHandler) GiveScore(session *remote.Session, msg []byte) any {
 	})
 	if err != nil {
 		logs.Error("[UnionHandler] GiveScore find and update err:%v", err)
+		return common.F(biz.SqlError)
+	}
+	if newMemberData == nil {
+		logs.Error("[UnionHandler] GiveScore find and update returned no user")
 		return common.F(biz.SqlError)
 	}
 	createData := &entity.ScoreGiveRecord{
@@ -1612,16 +1677,16 @@ func (h *UnionHandler) GetGiveScoreRecord(session *remote.Session, msg []byte) a
 	if total > 0 {
 		execData := mongo.Pipeline{
 			bson.D{
-				{"$match", bson.D{
-					{"uid", session.GetUid()},
-					{"unionID", req.UnionID},
+				{Key: "$match", Value: bson.D{
+					{Key: "uid", Value: session.GetUid()},
+					{Key: "unionID", Value: req.UnionID},
 				}},
 			},
 			bson.D{
-				{"$group", bson.D{
-					{"_id", nil},
-					{"totalGiveCount", bson.D{
-						{"$sum", "$count"},
+				{Key: "$group", Value: bson.D{
+					{Key: "_id", Value: nil},
+					{Key: "totalGiveCount", Value: bson.D{
+						{Key: "$sum", Value: "$count"},
 					}},
 				}},
 			},
@@ -1640,16 +1705,16 @@ func (h *UnionHandler) GetGiveScoreRecord(session *remote.Session, msg []byte) a
 	if total > 0 {
 		execData := mongo.Pipeline{
 			bson.D{
-				{"$match", bson.D{
-					{"gainUid", session.GetUid()},
-					{"unionID", req.UnionID},
+				{Key: "$match", Value: bson.D{
+					{Key: "gainUid", Value: session.GetUid()},
+					{Key: "unionID", Value: req.UnionID},
 				}},
 			},
 			bson.D{
-				{"$group", bson.D{
-					{"_id", nil},
-					{"totalGiveCount", bson.D{
-						{"$sum", "$count"},
+				{Key: "$group", Value: bson.D{
+					{Key: "_id", Value: nil},
+					{Key: "totalGiveCount", Value: bson.D{
+						{Key: "$sum", Value: "$count"},
 					}},
 				}},
 			},
@@ -1728,18 +1793,25 @@ func (h *UnionHandler) GetVideoRecord(session *remote.Session, msg []byte) any {
 	if err := json.Unmarshal(msg, &req); err != nil {
 		return common.F(biz.RequestDataError)
 	}
-	matchData := bson.M{
-		"videoRecordID": req.VideoRecordID,
+	if req.VideoRecordID == "" {
+		return common.F(biz.RequestDataError)
 	}
-	var data *entity.GameVideoRecord
-	err := h.commonDao.FindOneData(context.Background(), "gameVideoRecord", matchData, data)
+	objectID, err := primitive.ObjectIDFromHex(req.VideoRecordID)
+	if err != nil {
+		return common.F(biz.RequestDataError)
+	}
+	var data entity.GameVideoRecord
+	err = h.commonDao.FindOneData(context.Background(), "gameVideoRecord", bson.M{"_id": objectID}, &data)
 	if err != nil {
 		logs.Error("[UnionHandler] GetVideoRecord err:%v", err)
 		return common.F(biz.SqlError)
 	}
+	if data.Id.IsZero() {
+		return common.F(biz.RequestDataError)
+	}
 
 	res := map[string]any{
-		"gameVideoRecordData": data,
+		"gameVideoRecordData": &data,
 	}
 	return common.S(res)
 }
@@ -1750,19 +1822,22 @@ func (h *UnionHandler) UpdateForbidGameStatus(session *remote.Session, msg []byt
 	if err := json.Unmarshal(msg, &req); err != nil {
 		return common.F(biz.RequestDataError)
 	}
-	var unionData *entity.Union
+	if req.UnionID <= 0 || req.Uid == "" {
+		return common.F(biz.RequestDataError)
+	}
+	var unionData entity.Union
 	err := h.commonDao.FindOneData(context.Background(), "union", bson.M{
 		"unionID": req.UnionID,
-	}, unionData)
+	}, &unionData)
 	if err != nil {
 		logs.Error("[UnionHandler] UpdateForbidGameStatus err:%v", err)
 		return common.F(biz.SqlError)
 	}
-	if unionData == nil || unionData.OwnerUid != session.GetUid() {
+	if unionData.Id.IsZero() || unionData.OwnerUid != session.GetUid() {
 		return common.F(biz.RequestDataError)
 	}
 	// 查询用户数据
-	userData, err := h.userDao.FindUserByUid(context.TODO(), session.GetUid())
+	userData, err := h.userDao.FindUserByUid(context.TODO(), req.Uid)
 	if err != nil {
 		logs.Error("[UnionHandler] UpdateForbidGameStatus err:%v", err)
 		return common.F(biz.SqlError)
@@ -1782,7 +1857,7 @@ func (h *UnionHandler) UpdateForbidGameStatus(session *remote.Session, msg []byt
 	if unionItem.ProhibitGame == req.Forbid {
 		return common.S(nil)
 	}
-	newUserData, err := h.userDao.FindAndUpdate(context.TODO(), bson.M{"uid": session.GetUid(), "unionInfo.unionID": req.UnionID}, bson.M{"unionInfo.$.prohibitGame": req.Forbid})
+	newUserData, err := h.userDao.FindAndUpdate(context.TODO(), bson.M{"uid": req.Uid, "unionInfo.unionID": req.UnionID}, bson.M{"$set": bson.M{"unionInfo.$.prohibitGame": req.Forbid}})
 	if err != nil {
 		logs.Error("[UnionHandler] UpdateForbidGameStatus err:%v", err)
 		return common.F(biz.SqlError)
@@ -1801,33 +1876,37 @@ func (h *UnionHandler) GetRank(session *remote.Session, msg []byte) any {
 	if err := json.Unmarshal(msg, &req); err != nil {
 		return common.F(biz.RequestDataError)
 	}
+	if req.UnionID <= 0 {
+		return common.F(biz.RequestDataError)
+	}
 	// 查询联盟数据
 	unionData, err := h.unionDao.FindUnionByUnionID(context.TODO(), req.UnionID)
 	if err != nil {
 		logs.Error("[UnionHandler] GetRank err:%v", err)
 		return common.F(biz.SqlError)
 	}
-	if unionData == nil || (unionData.OwnerUid != session.GetUid() && !unionData.ShowRank) {
+	if unionData == nil || !canViewUnionRank(unionData.OwnerUid, session.GetUid(), unionData.ShowRank) {
 		return common.F(biz.RequestDataError)
 	}
+	rankMatch := mergeBsonMatch(req.MatchData, bson.M{"unionInfo.unionID": req.UnionID})
 	aggregateData := mongo.Pipeline{
 		bson.D{
-			{"$match", req.MatchData},
+			{Key: "$match", Value: rankMatch},
 		},
 		bson.D{
-			{"$unwind", "$unionInfo"},
+			{Key: "$unwind", Value: "$unionInfo"},
 		},
 		bson.D{
-			{"$match", req.MatchData},
+			{Key: "$match", Value: bson.M{"unionInfo.unionID": req.UnionID}},
 		},
 		bson.D{
-			{"$sort", req.SortData},
+			{Key: "$sort", Value: req.SortData},
 		},
 		bson.D{
-			{"$skip", req.StartIndex},
+			{Key: "$skip", Value: req.StartIndex},
 		},
 		bson.D{
-			{"$limit", req.Count},
+			{Key: "$limit", Value: req.Count},
 		},
 	}
 	var list []*entity.UserAggregate
@@ -1864,16 +1943,22 @@ func (h *UnionHandler) GetRankSingleDraw(session *remote.Session, msg []byte) an
 	if err := json.Unmarshal(msg, &req); err != nil {
 		return common.F(biz.RequestDataError)
 	}
+	if req.UnionID <= 0 {
+		return common.F(biz.RequestDataError)
+	}
 	// 查询联盟数据
 	unionData, err := h.unionDao.FindUnionByUnionID(context.TODO(), req.UnionID)
 	if err != nil {
 		logs.Error("[UnionHandler] GetRankSingleDraw err:%v", err)
 		return common.F(biz.SqlError)
 	}
-	if unionData == nil || unionData.OwnerUid != session.GetUid() || !unionData.ShowSingleRank {
+	if unionData == nil || !canViewUnionRank(unionData.OwnerUid, session.GetUid(), unionData.ShowSingleRank) {
 		return common.F(biz.RequestDataError)
 	}
-	req.MatchData["createTime"] = bson.M{"$gte": utils.GetTimeTodayStart()}
+	rankMatch := mergeBsonMatch(req.MatchData, bson.M{
+		"unionID":    req.UnionID,
+		"createTime": bson.M{"$gte": utils.GetTimeTodayStart()},
+	})
 	groupData := bson.M{
 		"_id": "$userList.uid",
 		"nickname": bson.M{
@@ -1894,25 +1979,25 @@ func (h *UnionHandler) GetRankSingleDraw(session *remote.Session, msg []byte) an
 	}
 	aggregateData := mongo.Pipeline{
 		bson.D{
-			{"$match", req.MatchData},
+			{Key: "$match", Value: rankMatch},
 		},
 		bson.D{
-			{"$unwind", "$userList"},
+			{Key: "$unwind", Value: "$userList"},
 		},
 		bson.D{
-			{"$match", req.MatchData},
+			{Key: "$match", Value: rankMatch},
 		},
 		bson.D{
-			{"$group", groupData},
+			{Key: "$group", Value: groupData},
 		},
 		bson.D{
-			{"$sort", req.SortData},
+			{Key: "$sort", Value: req.SortData},
 		},
 		bson.D{
-			{"$skip", req.StartIndex},
+			{Key: "$skip", Value: req.StartIndex},
 		},
 		bson.D{
-			{"$limit", req.Count},
+			{Key: "$limit", Value: req.Count},
 		},
 	}
 	var list []*entity.UserGameRecordAggregate
@@ -1943,4 +2028,24 @@ func NewUnionHandler(r *repo.Manager) *UnionHandler {
 		commonDao:   dao.NewCommonDao(r),
 		userService: service.NewUserService(r),
 	}
+}
+
+func cloneBsonMatch(source bson.M) bson.M {
+	clone := make(bson.M, len(source))
+	for key, value := range source {
+		clone[key] = value
+	}
+	return clone
+}
+
+func canViewUnionRank(ownerUid, viewerUid string, visible bool) bool {
+	return ownerUid == viewerUid || visible
+}
+
+func mergeBsonMatch(source bson.M, required bson.M) bson.M {
+	match := cloneBsonMatch(source)
+	for key, value := range required {
+		match[key] = value
+	}
+	return match
 }

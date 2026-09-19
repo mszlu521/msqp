@@ -2,8 +2,10 @@ package remote
 
 import (
 	"common/logs"
+	"errors"
 	"framework/game"
 	"github.com/nats-io/nats.go"
+	"time"
 )
 
 type NatsClient struct {
@@ -21,7 +23,13 @@ func NewNatsClient(serverId string, readChan chan []byte) *NatsClient {
 
 func (c *NatsClient) Run() error {
 	var err error
-	c.conn, err = nats.Connect(game.Conf.ServersConf.Nats.Url)
+	c.conn, err = nats.Connect(
+		game.Conf.ServersConf.Nats.Url,
+		nats.Name(c.serverId),
+		nats.RetryOnFailedConnect(true),
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(time.Second),
+	)
 	if err != nil {
 		logs.Error("connect nats server fail,err:%v", err)
 		return err
@@ -46,8 +54,8 @@ func (c *NatsClient) sub() {
 	}
 }
 func (c *NatsClient) SendMsg(dst string, data []byte) error {
-	if c.conn != nil {
-		return c.conn.Publish(dst, data)
+	if c.conn == nil {
+		return errors.New("nats client is not connected")
 	}
-	return nil
+	return c.conn.Publish(dst, data)
 }

@@ -19,4 +19,4 @@ services:
   connector:
     id: connector-1
     clientHost: 127.0.0.1 #对外的IP或者域名
-    clientPort: 80 # 对外的端口
+    clientPort: 12000 # docker-compose-app.yml exposes the connector on this host port

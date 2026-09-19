@@ -1,13 +1,15 @@
 httpPort: 13000
 metricPort: 5856
 appName: connector
+server:
+  maxConn: 1000
 log:
   level: DEBUG
 db:
   mongo:
     url: mongodb://mongo-qp:27017
     userName: root
-    password: mszlu!@#987432@#
+    password: root123456
     minPoolSize: 10
     maxPoolSize: 100
     db: msqp

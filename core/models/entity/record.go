@@ -81,7 +81,7 @@ type GameUser struct {
 type GameVideoRecord struct {
 	Id         primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
 	RoomID     string             `bson:"roomID" json:"roomID"`
-	GmeType    int                `bson:"gmeType" json:"gmeType"`
+	GmeType    int                `bson:"gameType" json:"gameType"`
 	Detail     string             `bson:"detail" json:"detail"`
 	CreateTime int64              `bson:"createTime" json:"createTime"`
 }

@@ -19,7 +19,7 @@ func (d *UnionDao) FindUnionListByIds(ctx context.Context, unionIds []int64) ([]
 	collection := d.repo.Mongo.Db.Collection("union")
 	var list []*entity.Union
 	cur, err := collection.Find(ctx, bson.D{
-		{"unionID", bson.D{{"$in", unionIds}}},
+		{Key: "unionID", Value: bson.D{{Key: "$in", Value: unionIds}}},
 	})
 	if err != nil {
 		return nil, err
@@ -48,7 +48,7 @@ func (d *UnionDao) Insert(ctx context.Context, union *entity.Union) (any, error)
 func (d *UnionDao) FindUnionListByUId(ctx context.Context, uid string) (*entity.Union, error) {
 	collection := d.repo.Mongo.Db.Collection("union")
 	singleResult := collection.FindOne(ctx, bson.D{
-		{"ownerUid", uid},
+		{Key: "ownerUid", Value: uid},
 	})
 	union := new(entity.Union)
 	err := singleResult.Decode(union)
@@ -64,7 +64,7 @@ func (d *UnionDao) FindUnionListByUId(ctx context.Context, uid string) (*entity.
 func (d *UnionDao) FindUnionByUnionID(ctx context.Context, unionID int64) (*entity.Union, error) {
 	collection := d.repo.Mongo.Db.Collection("union")
 	singleResult := collection.FindOne(ctx, bson.D{
-		{"unionID", unionID},
+		{Key: "unionID", Value: unionID},
 	})
 	union := new(entity.Union)
 	err := singleResult.Decode(union)

@@ -1,4 +1,3 @@
-version: "3.5"
 services:
   nats:
     container_name: nats-qp
@@ -7,7 +6,6 @@ services:
       - "8222:8222"
       - "4222:4222"
     command: "--http_port 8222 "
-    networks: ["nats"]
   Etcd:
     container_name: etcd3-qp
     image: bitnami/etcd:${ETCD_VERSION}
@@ -48,6 +46,3 @@ services:
     ports:
       - ${REDIS_PORT}:6379
     command: redis-server /etc/redis/redis.conf
-networks:
-  nats:
-    name: nats

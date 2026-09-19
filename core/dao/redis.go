@@ -23,6 +23,9 @@ type RedisDao struct {
 }
 
 func (d *RedisDao) Store(ctx context.Context, key string, value string) error {
+	if !d.hasClient() {
+		return errors.New("redis client is not initialized")
+	}
 	var err error
 	if d.repo.Redis.Cli != nil {
 		_, err = d.repo.Redis.Cli.Set(ctx, key, value, 0).Result()
@@ -32,6 +35,9 @@ func (d *RedisDao) Store(ctx context.Context, key string, value string) error {
 	return err
 }
 func (d *RedisDao) Get(ctx context.Context, key string) (string, error) {
+	if !d.hasClient() {
+		return "", errors.New("redis client is not initialized")
+	}
 	var err error
 	var value string
 	if d.repo.Redis.Cli != nil {
@@ -51,6 +57,9 @@ func (d *RedisDao) NextAccountId() (string, error) {
 }
 
 func (d *RedisDao) incr(key string) (string, error) {
+	if !d.hasClient() {
+		return "", errors.New("redis client is not initialized")
+	}
 	//判断此key是否存在 不存在 set 存在就自增
 	todo := context.TODO()
 	var exist int64
@@ -85,7 +94,16 @@ func (d *RedisDao) incr(key string) (string, error) {
 }
 
 func (d *RedisDao) CheckSmsCode(account string, code string) bool {
-	v := d.repo.Redis.Cli.Get(context.TODO(), Register+account).Val()
+	if !d.hasClient() {
+		return false
+	}
+	ctx := context.TODO()
+	var v string
+	if d.repo.Redis.Cli != nil {
+		v = d.repo.Redis.Cli.Get(ctx, Register+account).Val()
+	} else if d.repo.Redis.ClusterCli != nil {
+		v = d.repo.Redis.ClusterCli.Get(ctx, Register+account).Val()
+	}
 	if v != code {
 		return false
 	}
@@ -93,14 +111,36 @@ func (d *RedisDao) CheckSmsCode(account string, code string) bool {
 }
 
 func (d *RedisDao) Register(number string, code string, second time.Duration) error {
-	return d.repo.Redis.Cli.Set(context.TODO(), Register+number, code, second).Err()
+	if !d.hasClient() {
+		return errors.New("redis client is not initialized")
+	}
+	ctx := context.TODO()
+	if d.repo.Redis.Cli != nil {
+		return d.repo.Redis.Cli.Set(ctx, Register+number, code, second).Err()
+	}
+	if d.repo.Redis.ClusterCli != nil {
+		return d.repo.Redis.ClusterCli.Set(ctx, Register+number, code, second).Err()
+	}
+	return errors.New("redis client is not initialized")
 }
 
 func (d *RedisDao) Delete(ctx context.Context, key string) error {
-	return d.repo.Redis.Cli.Del(ctx, key).Err()
+	if !d.hasClient() {
+		return errors.New("redis client is not initialized")
+	}
+	if d.repo.Redis.Cli != nil {
+		return d.repo.Redis.Cli.Del(ctx, key).Err()
+	}
+	if d.repo.Redis.ClusterCli != nil {
+		return d.repo.Redis.ClusterCli.Del(ctx, key).Err()
+	}
+	return errors.New("redis client is not initialized")
 }
 
 func (d *RedisDao) incrId(key string, begin int64) (int64, error) {
+	if !d.hasClient() {
+		return -1, errors.New("redis client is not initialized")
+	}
 	//判断此key是否存在 不存在 set 存在就自增
 	todo := context.TODO()
 	var exist int64
@@ -152,4 +192,9 @@ func NewRedisDao(m *repo.Manager) *RedisDao {
 	return &RedisDao{
 		repo: m,
 	}
+}
+
+func (d *RedisDao) hasClient() bool {
+	return d != nil && d.repo != nil && d.repo.Redis != nil &&
+		(d.repo.Redis.Cli != nil || d.repo.Redis.ClusterCli != nil)
 }

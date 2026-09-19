@@ -25,8 +25,59 @@ func (d *AccountDao) SaveAccount(ctx context.Context, ac *entity.Account) error 
 func (d *AccountDao) FindAccountByAccount(ctx context.Context, account string) (*entity.Account, error) {
 	table := d.repo.Mongo.Db.Collection("account")
 	result := table.FindOne(ctx, bson.D{
-		{"phoneAccount", account},
+		{Key: "phoneAccount", Value: account},
 	})
+	ac := new(entity.Account)
+	err := result.Decode(ac)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return ac, nil
+}
+
+func (d *AccountDao) FindAccountByCredentials(ctx context.Context, account string, password string) (*entity.Account, error) {
+	table := d.repo.Mongo.Db.Collection("account")
+	result := table.FindOne(ctx, bson.D{
+		{Key: "account", Value: account},
+		{Key: "password", Value: password},
+	})
+	ac := new(entity.Account)
+	err := result.Decode(ac)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return ac, nil
+}
+
+func (d *AccountDao) FindLoginAccount(ctx context.Context, account string) (*entity.Account, error) {
+	table := d.repo.Mongo.Db.Collection("account")
+	result := table.FindOne(ctx, bson.D{{Key: "account", Value: account}})
+	ac := new(entity.Account)
+	err := result.Decode(ac)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return ac, nil
+}
+
+func (d *AccountDao) UpdateAccountPassword(ctx context.Context, account string, password string) error {
+	table := d.repo.Mongo.Db.Collection("account")
+	_, err := table.UpdateOne(ctx, bson.M{"account": account}, bson.M{"$set": bson.M{"password": password}})
+	return err
+}
+
+func (d *AccountDao) FindWxAccount(ctx context.Context, account string) (*entity.Account, error) {
+	table := d.repo.Mongo.Db.Collection("account")
+	result := table.FindOne(ctx, bson.D{{Key: "wxAccount", Value: account}})
 	ac := new(entity.Account)
 	err := result.Decode(ac)
 	if err != nil {
@@ -41,7 +92,7 @@ func (d *AccountDao) FindAccountByAccount(ctx context.Context, account string) (
 func (d *AccountDao) FindAccountByPhone(ctx context.Context, phone string) (*entity.Account, error) {
 	table := d.repo.Mongo.Db.Collection("account")
 	result := table.FindOne(ctx, bson.D{
-		{"phoneAccount", phone},
+		{Key: "phoneAccount", Value: phone},
 	})
 	ac := new(entity.Account)
 	err := result.Decode(ac)

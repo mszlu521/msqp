@@ -44,6 +44,10 @@ func (d *CommonDao) FindDataAndCount(ctx context.Context, tableName string, star
 	}
 	defer cursor.Close(ctx)
 	err = cursor.All(ctx, list)
+	if err != nil {
+		logs.Error("FindDataAndCount decode error: %v", err)
+		return 0, err
+	}
 	total, err := collection.CountDocuments(ctx, matchData)
 	if err != nil {
 		logs.Error("CountDocuments error: %v", err)

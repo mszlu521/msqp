@@ -4,6 +4,7 @@ import (
 	"common"
 	"common/biz"
 	"context"
+	"core/models/entity"
 	"core/repo"
 	"core/service"
 	"encoding/json"
@@ -49,6 +50,9 @@ func (h *UnionHandler) CreateRoom(session *remote.Session, msg []byte) any {
 		if isUserInRoom {
 			return common.F(biz.Fail)
 		}
+	}
+	if !hasUnionAccess(userData, req.UnionID) {
+		return common.F(biz.NotInUnion)
 	}
 
 	union := h.um.GetUnion(req.UnionID, h.redisService, h.userService, h.unionService)
@@ -98,7 +102,7 @@ func (h *UnionHandler) JoinRoom(session *remote.Session, msg []byte) any {
 	if bizErr != nil {
 		return common.F(bizErr)
 	}
-	return nil
+	return common.S(nil)
 }
 
 func (h *UnionHandler) GetUnionInfo(session *remote.Session, msg []byte) any {
@@ -115,6 +119,9 @@ func (h *UnionHandler) GetUnionInfo(session *remote.Session, msg []byte) any {
 	}
 	if user == nil {
 		return common.F(biz.InvalidUsers)
+	}
+	if !hasUnionAccess(user, req.UnionID) {
+		return common.F(biz.NotInUnion)
 	}
 	union := h.um.GetUnion(req.UnionID, h.redisService, h.userService, h.unionService)
 	unionInfo := union.GetUnionInfo(session.GetUid())
@@ -134,6 +141,16 @@ func (h *UnionHandler) GetUnionRoomList(session *remote.Session, msg []byte) any
 	}
 	if req.UnionID <= 0 {
 		return common.F(biz.RequestDataError)
+	}
+	user, err := h.userService.FindUserByUid(context.TODO(), session.GetUid())
+	if err != nil {
+		return common.F(err)
+	}
+	if user == nil {
+		return common.F(biz.InvalidUsers)
+	}
+	if !hasUnionAccess(user, req.UnionID) {
+		return common.F(biz.NotInUnion)
 	}
 	union := h.um.GetUnion(req.UnionID, h.redisService, h.userService, h.unionService)
 	roomList := union.GetUnionRoomList()
@@ -167,6 +184,9 @@ func (h *UnionHandler) QuickJoin(session *remote.Session, msg []byte) any {
 	if req.UnionID <= 0 {
 		return common.F(biz.RequestDataError)
 	}
+	if !hasUnionAccess(userData, req.UnionID) {
+		return common.F(biz.NotInUnion)
+	}
 	union := h.um.GetUnion(req.UnionID, h.redisService, h.userService, h.unionService)
 	e := union.QuickJoin(session, req.GameRuleID, userData)
 	if e.Code != biz.OK {
@@ -183,13 +203,33 @@ func (h *UnionHandler) GetHongBao(session *remote.Session, msg []byte) any {
 	if req.UnionID <= 0 {
 		return common.F(biz.RequestDataError)
 	}
+	user, err := h.userService.FindUserByUid(context.TODO(), session.GetUid())
+	if err != nil {
+		return common.F(err)
+	}
+	if user == nil {
+		return common.F(biz.InvalidUsers)
+	}
+	if !hasUnionAccess(user, req.UnionID) {
+		return common.F(biz.NotInUnion)
+	}
 	union := h.um.GetUnion(req.UnionID, h.redisService, h.userService, h.unionService)
 	res, err := union.GetHongBao(session.GetUid())
 	if err != nil {
 		return common.F(err)
 	}
 
-	return common.S(res)
+	return res
+}
+
+func hasUnionAccess(user *entity.User, unionID int64) bool {
+	if user == nil || unionID <= 0 {
+		return false
+	}
+	if unionID == 1 {
+		return true
+	}
+	return user.GetUnionItem(unionID) != nil
 }
 
 func NewUnionHandler(r *repo.Manager, um *logic.UnionManager) *UnionHandler {

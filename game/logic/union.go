@@ -35,9 +35,14 @@ type Union struct {
 }
 
 func (u *Union) DestroyRoom(roomId string) {
+	u.Lock()
+	defer u.Unlock()
 	delete(u.RoomList, roomId)
 }
 func (u *Union) CreateRoom(redisService *service.RedisService, userService *service.UserService, session *remote.Session, req request.CreateRoomReq, userData *entity.User) *msError.Error {
+	if userData == nil {
+		return biz.InvalidUsers
+	}
 	newRoom, err := u.createRoom(req, userData.Uid, session)
 	if err != nil {
 		logs.Error("CreateRoom err:%v", err)
@@ -48,6 +53,8 @@ func (u *Union) CreateRoom(redisService *service.RedisService, userService *serv
 	return newRoom.UserEntryRoom(session, userData)
 }
 func (u *Union) GetOwnerUid() string {
+	u.RLock()
+	defer u.RUnlock()
 	if u.unionData == nil {
 		return ""
 	}
@@ -55,8 +62,8 @@ func (u *Union) GetOwnerUid() string {
 }
 func (u *Union) DismissRoom(roomId string, session *remote.Session) {
 	u.Lock()
-	defer u.Unlock()
 	r, ok := u.RoomList[roomId]
+	u.Unlock()
 	if !ok {
 		return
 	}
@@ -64,14 +71,13 @@ func (u *Union) DismissRoom(roomId string, session *remote.Session) {
 }
 
 func (u *Union) createRoom(req request.CreateRoomReq, uid string, session *remote.Session) (*room.Room, error) {
-	u.Lock()
-	defer u.Unlock()
-	//1. 需要创建一个房间 生成一个房间号
-	roomId := u.m.CreateRoomId()
 	gameRule := req.GameRule
 	if req.GameRuleID != "" {
 		gameRule = u.GetGameRule(req.GameRuleID)
 	}
+	//1. 需要创建一个房间 生成一个房间号
+	roomId := u.m.CreateRoomId()
+	u.Lock()
 	creatorInfo := &proto.RoomCreator{
 		Uid:         uid,
 		CreatorType: enums.UserCreatorType,
@@ -82,14 +88,23 @@ func (u *Union) createRoom(req request.CreateRoomReq, uid string, session *remot
 	}
 	newRoom, err := room.NewRoom(roomId, creatorInfo, gameRule, u, session)
 	if err != nil {
+		u.Unlock()
+		u.m.releaseRoomID(roomId)
 		return nil, err
 	}
 	u.RoomList[roomId] = newRoom
+	u.Unlock()
+	u.m.releaseRoomID(roomId)
 	return newRoom, nil
 }
 
 func (u *Union) GetUnionInfo(uid string) entity.Union {
+	u.Lock()
+	defer u.Unlock()
 	u.activeTime = time.Now()
+	if u.unionData == nil {
+		return entity.Union{UnionID: u.Id}
+	}
 	unionData := *u.unionData
 	if uid != unionData.OwnerUid {
 		unionData.JoinRequestList = []entity.JoinRequest{}
@@ -104,9 +119,17 @@ func (u *Union) init() {
 }
 
 func (u *Union) GetUnionRoomList() []*proto.RoomInfo {
-	u.activeTime = time.Now()
-	var list []*proto.RoomInfo
+	u.RLock()
+	rooms := make([]*room.Room, 0, len(u.RoomList))
 	for _, v := range u.RoomList {
+		rooms = append(rooms, v)
+	}
+	u.RUnlock()
+	u.Lock()
+	u.activeTime = time.Now()
+	u.Unlock()
+	var list []*proto.RoomInfo
+	for _, v := range rooms {
 		roomInfo := v.GetRoomInfo()
 		list = append(list, roomInfo)
 	}
@@ -117,19 +140,30 @@ func (u *Union) GetUnionRoomList() []*proto.RoomInfo {
 }
 
 func (u *Union) QuickJoin(session *remote.Session, gameRuleID string, userInfo *entity.User) *msError.Error {
-	u.activeTime = time.Now()
+	u.Lock()
+	if u.unionData == nil {
+		u.Unlock()
+		return biz.RoomNotExist
+	}
 	var roomRuleItem *entity.RoomRule
 	for _, v := range u.unionData.RoomRuleList {
 		if v.Id.Hex() == gameRuleID {
-			roomRuleItem = v
+			copyRule := *v
+			roomRuleItem = &copyRule
 			break
 		}
 	}
+	rooms := make([]*room.Room, 0, len(u.RoomList))
+	for _, v := range u.RoomList {
+		rooms = append(rooms, v)
+	}
+	u.activeTime = time.Now()
+	u.Unlock()
 	if roomRuleItem == nil {
 		return biz.RoomNotExist
 	}
 	//查询是否有房间 有直接加入
-	for _, v := range u.RoomList {
+	for _, v := range rooms {
 		if v.GameRule.Id == gameRuleID &&
 			v.CanEnter() && v.HasEmptyChair() {
 			return u.JoinRoom(session, v.Id, userInfo)
@@ -149,6 +183,7 @@ func (u *Union) QuickJoin(session *remote.Session, gameRuleID string, userInfo *
 	err := json.Unmarshal([]byte(roomRuleItem.GameRule), &gameRule)
 	if err != nil {
 		logs.Error("QuickJoin json.Unmarshal err:%v", err)
+		u.m.releaseRoomID(roomId)
 		return biz.Fail
 	}
 	gameRule.GameType = enums.GameType(roomRuleItem.GameType)
@@ -157,15 +192,22 @@ func (u *Union) QuickJoin(session *remote.Session, gameRuleID string, userInfo *
 	roomFrame, err := room.NewRoom(roomId, creatorInfo, gameRule, u, session)
 	if err != nil {
 		logs.Error("QuickJoin NewRoom err:%v", err)
+		u.m.releaseRoomID(roomId)
 		return biz.Fail
 	}
+	u.Lock()
 	u.RoomList[roomId] = roomFrame
+	u.Unlock()
+	u.m.releaseRoomID(roomId)
 	roomFrame.UpdateLotteryInfo(u.getLotteryStatus())
 	return roomFrame.UserEntryRoom(session, userInfo)
 }
 
 func (u *Union) AddRoomRuleList(gameRule proto.GameRule, ruleName string, gameType int) error {
-	marshal, _ := json.Marshal(gameRule)
+	marshal, err := json.Marshal(gameRule)
+	if err != nil {
+		return err
+	}
 	roomRule := &entity.RoomRule{
 		Id:       primitive.NewObjectID(),
 		GameRule: string(marshal),
@@ -181,12 +223,19 @@ func (u *Union) AddRoomRuleList(gameRule proto.GameRule, ruleName string, gameTy
 	if unionData == nil {
 		return nil
 	}
-	u.unionData.RoomRuleList = unionData.RoomRuleList
+	u.Lock()
+	if u.unionData != nil {
+		u.unionData.RoomRuleList = unionData.RoomRuleList
+	}
+	u.Unlock()
 	return nil
 }
 
 func (u *Union) UpdateRoomRuleList(id string, gameRule proto.GameRule, ruleName string, gameType int) error {
-	marshal, _ := json.Marshal(gameRule)
+	marshal, err := json.Marshal(gameRule)
+	if err != nil {
+		return err
+	}
 	saveData := bson.M{"$set": bson.M{
 		"roomRuleList.$.gameRule": string(marshal),
 		"roomRuleList.$.ruleName": ruleName,
@@ -205,7 +254,11 @@ func (u *Union) UpdateRoomRuleList(id string, gameRule proto.GameRule, ruleName 
 	if unionData == nil {
 		return nil
 	}
-	u.unionData.RoomRuleList = unionData.RoomRuleList
+	u.Lock()
+	if u.unionData != nil {
+		u.unionData.RoomRuleList = unionData.RoomRuleList
+	}
+	u.Unlock()
 	return nil
 }
 
@@ -222,8 +275,12 @@ func (u *Union) JoinRoom(session *remote.Session, roomId string, data *entity.Us
 			return biz.NotInUnion
 		}
 	}
-	u.activeTime = time.Now()
+	u.RLock()
 	roomFrame := u.RoomList[roomId]
+	u.RUnlock()
+	u.Lock()
+	u.activeTime = time.Now()
+	u.Unlock()
 	if roomFrame == nil {
 		return biz.RoomNotExist
 	}
@@ -231,13 +288,21 @@ func (u *Union) JoinRoom(session *remote.Session, roomId string, data *entity.Us
 }
 
 func (u *Union) getLotteryStatus() *entity.ResultLotteryInfo {
+	u.RLock()
+	defer u.RUnlock()
 	if u.unionData == nil {
 		return &entity.ResultLotteryInfo{}
 	}
-	return u.unionData.ResultLotteryInfo
+	if u.unionData.ResultLotteryInfo == nil {
+		return &entity.ResultLotteryInfo{}
+	}
+	status := *u.unionData.ResultLotteryInfo
+	return &status
 }
 
 func (u *Union) GetHongBao(uid string) (*response.HongBaoResp, *msError.Error) {
+	u.Lock()
+	defer u.Unlock()
 	r := &response.HongBaoResp{}
 	r.Code = biz.OK
 	if u.unionData == nil {
@@ -279,17 +344,39 @@ func (u *Union) GetHongBao(uid string) (*response.HongBaoResp, *msError.Error) {
 		}
 		return r, nil
 	}
-	score, _, err := utils.Shift(u.unionData.HongBaoScoreList)
+	score := u.unionData.HongBaoScoreList[0]
+	claimedUnion, err := u.unionService.FindUnionAndUpdate(
+		context.Background(),
+		bson.M{
+			"unionID":            u.Id,
+			"hongBaoUidList":     bson.M{"$ne": uid},
+			"hongBaoScoreList.0": score,
+		},
+		bson.M{
+			"$pop":  bson.M{"hongBaoScoreList": -1},
+			"$push": bson.M{"hongBaoUidList": uid},
+		},
+	)
 	if err != nil {
-		logs.Error("GetHongBao Shift err:%v", err)
+		logs.Error("GetHongBao claim update err:%v", err)
 		return nil, biz.Fail
 	}
-	u.unionData.HongBaoUidList = append(u.unionData.HongBaoUidList, uid)
+	if claimedUnion == nil {
+		r.Msg = map[string]any{"score": 0}
+		return r, nil
+	}
+	u.unionData.HongBaoScoreList = claimedUnion.HongBaoScoreList
+	u.unionData.HongBaoUidList = claimedUnion.HongBaoUidList
 	saveData := bson.M{"$inc": bson.M{
 		"unionInfo.$.score": score,
 	}}
 	matchData := bson.M{"unionInfo.unionID": u.Id, "uid": uid}
 	newUserData := u.userService.UpdateUserData(matchData, saveData)
+	if newUserData == nil {
+		logs.Error("GetHongBao UpdateUserData failed uid:%s unionID:%d", uid, u.Id)
+		u.rollbackHongBaoClaim(uid, score)
+		return nil, biz.InvalidUsers
+	}
 	var newUnionInfo *entity.UnionInfo
 	for _, v := range newUserData.UnionInfo {
 		if v.UnionID == u.Id {
@@ -297,41 +384,24 @@ func (u *Union) GetHongBao(uid string) (*response.HongBaoResp, *msError.Error) {
 		}
 	}
 	if newUnionInfo == nil {
-		r.Msg = map[string]any{
-			"score": -1,
+		logs.Error("GetHongBao credited user has no union info uid:%s unionID:%d", uid, u.Id)
+	} else {
+		scoreChangeRecord := &entity.UserScoreChangeRecord{
+			Uid:              uid,
+			Nickname:         newUserData.Nickname,
+			UnionID:          u.Id,
+			ChangeCount:      int64(score),
+			LeftCount:        int64(newUnionInfo.Score),
+			LeftSafeBoxCount: int64(newUnionInfo.SafeScore),
+			ChangeType:       enums.ScoreChangeNone,
+			Describe:         "领取红包:" + strconv.Itoa(int(score)),
+			CreateTime:       time.Now().UnixMilli(),
 		}
-		return r, nil
-	}
-	scoreChangeRecord := &entity.UserScoreChangeRecord{
-		Uid:              uid,
-		Nickname:         newUserData.Nickname,
-		UnionID:          u.Id,
-		ChangeCount:      int64(score),
-		LeftCount:        int64(newUnionInfo.Score),
-		LeftSafeBoxCount: int64(newUnionInfo.SafeScore),
-		ChangeType:       enums.ScoreChangeNone,
-		Describe:         "领取红包:" + strconv.Itoa(int(score)),
-		CreateTime:       time.Now().UnixMilli(),
-	}
-	err = u.userService.SaveUserScoreChangeRecord(scoreChangeRecord)
-	if err != nil {
-		logs.Error("GetHongBao SaveUserScoreChangeRecord err:%v", err)
-		return nil, biz.Fail
-	}
-	_, err = u.unionService.FindUnionAndUpdate(
-		context.Background(),
-		bson.M{"unionID": u.Id},
-		bson.M{
-			"$set": bson.M{
-				"hongBaoScoreList": u.unionData.HongBaoScoreList,
-			},
-			"$push": bson.M{
-				"hongBaoUidList": uid,
-			},
-		})
-	if err != nil {
-		logs.Error("GetHongBao FindUnionAndUpdate err:%v", err)
-		return nil, biz.Fail
+		if err = u.userService.SaveUserScoreChangeRecord(scoreChangeRecord); err != nil {
+			// The score and claim are already committed. Do not report a retryable
+			// failure that could cause the client to claim twice.
+			logs.Error("GetHongBao SaveUserScoreChangeRecord err:%v", err)
+		}
 	}
 	r.Msg = map[string]any{
 		"score": score,
@@ -342,7 +412,29 @@ func (u *Union) GetHongBao(uid string) (*response.HongBaoResp, *msError.Error) {
 	return r, nil
 }
 
+func (u *Union) rollbackHongBaoClaim(uid string, score int32) {
+	rolledBack, err := u.unionService.FindUnionAndUpdate(
+		context.Background(),
+		bson.M{"unionID": u.Id, "hongBaoUidList": uid},
+		bson.M{
+			"$pull": bson.M{"hongBaoUidList": uid},
+			"$push": bson.M{"hongBaoScoreList": bson.M{
+				"$each":     []int32{score},
+				"$position": 0,
+			}},
+		},
+	)
+	if err != nil || rolledBack == nil {
+		logs.Error("rollback hong bao claim failed uid:%s unionID:%d err:%v", uid, u.Id, err)
+		return
+	}
+	u.unionData.HongBaoScoreList = rolledBack.HongBaoScoreList
+	u.unionData.HongBaoUidList = rolledBack.HongBaoUidList
+}
+
 func (u *Union) UpdateOpeningStatus(open bool) {
+	u.Lock()
+	defer u.Unlock()
 	if u.unionData == nil {
 		return
 	}
@@ -358,21 +450,41 @@ func (u *Union) UpdateOpeningStatus(open bool) {
 }
 
 func (u *Union) RemoveRoomRuleList(roomRuleId string) {
+	u.Lock()
+	defer u.Unlock()
 	if u.unionData == nil {
+		return
+	}
+	pullUpdate, err := roomRulePullUpdate(roomRuleId)
+	if err != nil {
+		logs.Error("RemoveRoomRuleList ObjectIDFromHex err:%v", err)
 		return
 	}
 	data, err := u.unionService.FindUnionAndUpdate(
 		context.Background(),
 		bson.M{"unionID": u.Id},
-		bson.M{"$pull": bson.M{"roomRuleList._id": roomRuleId}},
+		pullUpdate,
 	)
 	if err != nil {
 		logs.Error("RemoveRoomRuleList FindUnionAndUpdate err:%v", err)
 		return
 	}
+	if data == nil {
+		return
+	}
 	u.unionData.RoomRuleList = data.RoomRuleList
 }
+
+func roomRulePullUpdate(roomRuleId string) (bson.M, error) {
+	objectId, err := primitive.ObjectIDFromHex(roomRuleId)
+	if err != nil {
+		return nil, err
+	}
+	return bson.M{"$pull": bson.M{"roomRuleList": bson.M{"_id": objectId}}}, nil
+}
 func (u *Union) IsOpening() bool {
+	u.RLock()
+	defer u.RUnlock()
 	if u.unionData == nil {
 		return false
 	}
@@ -381,14 +493,22 @@ func (u *Union) IsOpening() bool {
 
 // GetLastActiveTime 获取上次活跃时间
 func (u *Union) GetLastActiveTime() time.Time {
+	u.RLock()
+	defer u.RUnlock()
 	return u.activeTime
 }
 
 func (u *Union) IsShouldDelete(t int64) bool {
-	return len(u.RoomList) == 0 && u.activeTime.UnixMilli()-time.Now().UnixMilli() > t
+	u.RLock()
+	empty := len(u.RoomList) == 0
+	activeTime := u.activeTime
+	u.RUnlock()
+	return empty && time.Now().UnixMilli()-activeTime.UnixMilli() > t
 }
 
 func (u *Union) UpdateUnionNotice(notice string) {
+	u.Lock()
+	defer u.Unlock()
 	if u.unionData == nil {
 		return
 	}
@@ -405,13 +525,24 @@ func (u *Union) UpdateUnionNotice(notice string) {
 }
 
 func (u *Union) GetGameRule(gameRuleID string) proto.GameRule {
+	u.RLock()
+	defer u.RUnlock()
+	if u.unionData == nil {
+		return proto.GameRule{}
+	}
 	for _, v := range u.unionData.RoomRuleList {
-		logs.Info("gameRuleID:%s,RoomRuleList ruleId: %s", gameRuleID, v.Id.String())
+		if v == nil {
+			continue
+		}
 		if v.Id.Hex() == gameRuleID {
-			rule := v.GameRule
 			var gameRule proto.GameRule
-			_ = json.Unmarshal([]byte(rule), &gameRule)
-			gameRule.Id = gameRuleID
+			if err := json.Unmarshal([]byte(v.GameRule), &gameRule); err != nil {
+				return proto.GameRule{}
+			}
+			// RoomRule metadata is authoritative for rules saved by older clients.
+			gameRule.GameType = enums.GameType(v.GameType)
+			gameRule.RuleName = v.RuleName
+			gameRule.Id = v.Id.Hex()
 			return gameRule
 		}
 	}
@@ -419,6 +550,8 @@ func (u *Union) GetGameRule(gameRuleID string) proto.GameRule {
 }
 
 func (u *Union) UpdateUnionName(unionName string) {
+	u.Lock()
+	defer u.Unlock()
 	if u.unionData == nil {
 		return
 	}
@@ -435,6 +568,8 @@ func (u *Union) UpdateUnionName(unionName string) {
 }
 
 func (u *Union) UpdatePartnerNoticeSwitch(isOpen bool) {
+	u.Lock()
+	defer u.Unlock()
 	if u.unionData == nil {
 		return
 	}
@@ -451,6 +586,8 @@ func (u *Union) UpdatePartnerNoticeSwitch(isOpen bool) {
 }
 
 func (u *Union) UpdateHongBaoSetting(status bool, startTime int64, endTime int64, count int, totalScore int64) *msError.Error {
+	u.Lock()
+	defer u.Unlock()
 	if u.unionData == nil {
 		return biz.Fail
 	}
@@ -491,23 +628,32 @@ func (u *Union) UpdateHongBaoSetting(status bool, startTime int64, endTime int64
 }
 
 func (u *Union) UpdateLotteryStatus(isOpen bool) {
+	u.Lock()
 	if u.unionData == nil {
+		u.Unlock()
 		return
 	}
 	if u.unionData.ResultLotteryInfo == nil {
 		u.unionData.ResultLotteryInfo = &entity.ResultLotteryInfo{}
 	}
 	if u.unionData.ResultLotteryInfo.Status == isOpen {
+		u.Unlock()
 		return
 	}
 	u.unionData.ResultLotteryInfo.Status = isOpen
-	saveData := bson.M{"$set": bson.M{"resultLotteryInfo": u.unionData.ResultLotteryInfo}}
+	lotteryInfo := *u.unionData.ResultLotteryInfo
+	rooms := make([]*room.Room, 0, len(u.RoomList))
+	for _, v := range u.RoomList {
+		rooms = append(rooms, v)
+	}
+	u.Unlock()
+	saveData := bson.M{"$set": bson.M{"resultLotteryInfo": &lotteryInfo}}
 	_, err := u.unionService.FindUnionAndUpdate(context.Background(), bson.M{"unionID": u.Id}, saveData)
 	if err != nil {
 		logs.Error("UpdateLotteryStatus FindUnionAndUpdate err:%v", err)
 	}
-	for _, v := range u.RoomList {
-		v.UpdateLotteryInfo(u.unionData.ResultLotteryInfo)
+	for _, v := range rooms {
+		v.UpdateLotteryInfo(&lotteryInfo)
 	}
 }
 func NewUnion(m *UnionManager, unionID int64, unionService *service.UnionService, redisService *service.RedisService, userService *service.UserService) *Union {

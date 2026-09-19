@@ -16,3 +16,11 @@ type SearchReq struct {
 	Uid   string `json:"uid,omitempty"`
 	Phone string `json:"phone,omitempty"`
 }
+
+type EmailReq struct {
+	EmailID any `json:"emailID"`
+}
+
+type CustomerServiceMsgReq struct {
+	Content string `json:"content"`
+}

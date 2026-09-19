@@ -19,6 +19,8 @@ func NewLogic() *Logic {
 
 // washCards  方块 梅花 红桃 黑桃
 func (l *Logic) washCards() {
+	l.Lock()
+	defer l.Unlock()
 	l.cards = []int{
 		0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
 		0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
@@ -34,22 +36,22 @@ func (l *Logic) washCards() {
 
 // getCards 获取三张手牌
 func (l *Logic) getCards() []int {
-	cards := make([]int, 3)
-	l.RLock()
-	defer l.RUnlock()
-	for i := 0; i < 3; i++ {
-		if len(cards) == 0 {
-			break
-		}
+	cards := make([]int, 0, 3)
+	l.Lock()
+	defer l.Unlock()
+	for len(cards) < 3 && len(l.cards) > 0 {
 		card := l.cards[len(l.cards)-1]
 		l.cards = l.cards[:len(l.cards)-1]
-		cards[i] = card
+		cards = append(cards, card)
 	}
 	return cards
 }
 
 // CompareCards result 0 he 大于0 win 小于0 lose
 func (l *Logic) CompareCards(from []int, to []int) int {
+	if len(from) != 3 || len(to) != 3 {
+		return 0
+	}
 	//获取牌类型
 	fromType := l.getCardsType(from)
 	toType := l.getCardsType(to)
@@ -81,6 +83,9 @@ func (l *Logic) CompareCards(from []int, to []int) int {
 }
 
 func (l *Logic) getCardsType(cards []int) CardsType {
+	if len(cards) != 3 {
+		return DanZhang
+	}
 	//1.豹子 牌面值相等  梅花 方块 红心 黑桃
 	one := l.getCardsNumber(cards[0])
 	two := l.getCardsNumber(cards[1])

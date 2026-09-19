@@ -17,3 +17,12 @@ type UpdateUserRes struct {
 	common.Result
 	UpdateUserData UpdateUserData `json:"updateUserData"`
 }
+
+type UpdateEmailData struct {
+	EmailArr string `json:"emailArr"`
+}
+
+type UpdateEmailRes struct {
+	common.Result
+	UpdateUserData UpdateEmailData `json:"updateUserData"`
+}

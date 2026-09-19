@@ -9,6 +9,7 @@ import (
 	"core/models/requests"
 	"core/repo"
 	"framework/msError"
+	"golang.org/x/crypto/bcrypt"
 	"time"
 	"user/pb"
 )
@@ -28,8 +29,13 @@ func NewAccountService(manager *repo.Manager) *AccountService {
 	}
 }
 func (a *AccountService) Login(ctx context.Context, req *pb.LoginParams) (*pb.LoginResponse, error) {
-	if req.LoginPlatform == requests.MobilePhone {
-		smsCode := req.Password
+	if req == nil {
+		return &pb.LoginResponse{}, msError.GrpcError(biz.RequestDataError)
+	}
+	if isMobileLogin(req) {
+		// SmsCode is the canonical field. Password remains a compatibility
+		// fallback for older clients that used the password field for SMS login.
+		smsCode := loginSmsCode(req)
 		if smsCode == "" {
 			//验证码错误
 			return &pb.LoginResponse{}, msError.GrpcError(biz.SmsCodeError)
@@ -59,8 +65,68 @@ func (a *AccountService) Login(ctx context.Context, req *pb.LoginParams) (*pb.Lo
 			Uid: ac.Uid,
 		}, nil
 	}
+	if req.LoginPlatform == requests.Account {
+		if req.Account == "" || req.Password == "" {
+			return &pb.LoginResponse{}, msError.GrpcError(biz.AccountOrPasswordError)
+		}
+		ac, err := a.accountDao.FindLoginAccount(context.TODO(), req.Account)
+		if err != nil {
+			logs.Error("FindAccountByCredentials err:%v", err)
+			return &pb.LoginResponse{}, msError.GrpcError(biz.SqlError)
+		}
+		if ac == nil {
+			return &pb.LoginResponse{}, msError.GrpcError(biz.AccountOrPasswordError)
+		}
+		valid, legacy := verifyAccountPassword(ac.Password, req.Password)
+		if !valid {
+			return &pb.LoginResponse{}, msError.GrpcError(biz.AccountOrPasswordError)
+		}
+		if legacy {
+			if passwordHash, hashErr := hashAccountPassword(req.Password); hashErr != nil {
+				logs.Error("hash legacy account password err:%v", hashErr)
+			} else if updateErr := a.accountDao.UpdateAccountPassword(context.TODO(), req.Account, passwordHash); updateErr != nil {
+				logs.Error("upgrade legacy account password err:%v", updateErr)
+			}
+		}
+		return &pb.LoginResponse{Uid: ac.Uid}, nil
+	}
+	if req.LoginPlatform == requests.WeiXin {
+		if req.Account == "" {
+			return &pb.LoginResponse{}, msError.GrpcError(biz.AccountOrPasswordError)
+		}
+		ac, err := a.accountDao.FindWxAccount(context.TODO(), req.Account)
+		if err != nil {
+			logs.Error("FindWxAccount err:%v", err)
+			return &pb.LoginResponse{}, msError.GrpcError(biz.SqlError)
+		}
+		if ac == nil {
+			return &pb.LoginResponse{}, msError.GrpcError(biz.AccountOrPasswordError)
+		}
+		return &pb.LoginResponse{Uid: ac.Uid}, nil
+	}
 	return &pb.LoginResponse{}, msError.GrpcError(biz.RequestDataError)
 }
+
+// Older migrated clients sent the SMS code with the account platform value.
+// Keep that narrow compatibility path while preserving normal account login semantics.
+func isMobileLogin(req *pb.LoginParams) bool {
+	if req == nil {
+		return false
+	}
+	return req.LoginPlatform == requests.MobilePhone ||
+		(req.LoginPlatform == requests.Account && req.GetSmsCode() != "" && req.GetPassword() == "")
+}
+
+func loginSmsCode(req *pb.LoginParams) string {
+	if req == nil {
+		return ""
+	}
+	if req.GetSmsCode() != "" {
+		return req.GetSmsCode()
+	}
+	return req.GetPassword()
+}
+
 func (a *AccountService) GetSMSCode(ctx context.Context, req *pb.GetSMSCodeParams) (*pb.Empty, error) {
 	code := "123456"
 	err := a.redisDao.Register(req.PhoneNumber, code, time.Minute*10)
@@ -109,6 +175,21 @@ func (a *AccountService) Register(ctx context.Context, req *pb.RegisterParams) (
 		return &pb.RegisterResponse{
 			Uid: ac.Uid,
 		}, nil
+	} else if req.LoginPlatform == requests.Account {
+		if req.Account == "" || req.Password == "" {
+			return &pb.RegisterResponse{}, msError.GrpcError(biz.RequestDataError)
+		}
+		if existing, err := a.accountDao.FindLoginAccount(context.TODO(), req.Account); err != nil {
+			logs.Error("FindLoginAccount err:%v", err)
+			return &pb.RegisterResponse{}, msError.GrpcError(biz.SqlError)
+		} else if existing != nil {
+			return &pb.RegisterResponse{}, msError.GrpcError(biz.AccountOrPasswordError)
+		}
+		ac, dbErr := a.accountRegister(req.Account, req.Password)
+		if dbErr != nil {
+			return &pb.RegisterResponse{}, msError.GrpcError(dbErr)
+		}
+		return &pb.RegisterResponse{Uid: ac.Uid}, nil
 	}
 	return &pb.RegisterResponse{}, nil
 }
@@ -148,4 +229,44 @@ func (a *AccountService) phoneRegister(account string) (*entity.Account, *msErro
 		return ac, biz.SqlError
 	}
 	return ac, nil
+}
+
+func (a *AccountService) accountRegister(account string, password string) (*entity.Account, *msError.Error) {
+	passwordHash, hashErr := hashAccountPassword(password)
+	if hashErr != nil {
+		logs.Error("hash account password err:%v", hashErr)
+		return &entity.Account{}, biz.Fail
+	}
+	ac := &entity.Account{
+		Account:    account,
+		Password:   passwordHash,
+		CreateTime: time.Now(),
+	}
+	uid, err := a.redisDao.NextAccountId()
+	if err != nil {
+		return ac, biz.SqlError
+	}
+	ac.Uid = uid
+	if err = a.accountDao.SaveAccount(context.TODO(), ac); err != nil {
+		return ac, biz.SqlError
+	}
+	return ac, nil
+}
+
+func hashAccountPassword(password string) (string, error) {
+	value, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	return string(value), err
+}
+
+func verifyAccountPassword(stored string, supplied string) (valid bool, legacy bool) {
+	if stored == "" || supplied == "" {
+		return false, false
+	}
+	if bcrypt.CompareHashAndPassword([]byte(stored), []byte(supplied)) == nil {
+		return true, false
+	}
+	if len(stored) < 4 || stored[:4] != "$2a$" && stored[:4] != "$2b$" && stored[:4] != "$2y$" {
+		return stored == supplied, stored == supplied
+	}
+	return false, false
 }

@@ -25,6 +25,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -71,26 +72,38 @@ type Room struct {
 	stopStartSchedulerID   chan struct{}
 	resultLotteryInfo      *entity.ResultLotteryInfo
 	userGetHongBaoCountArr []int
+	roomGeneration         atomic.Uint64
+	gameActionMu           sync.Mutex
 }
 
 func (r *Room) GetGameStarted() bool {
+	r.RLock()
+	defer r.RUnlock()
 	return r.gameStarted
 }
 
 func (r *Room) GetMaxBureau() int {
+	r.RLock()
+	defer r.RUnlock()
 	return r.maxBureau
 }
 
 func (r *Room) SetCurBureau(curBureau int) {
+	r.Lock()
+	defer r.Unlock()
 	r.curBureau = curBureau
 }
 
 func (r *Room) GetCurBureau() int {
+	r.RLock()
+	defer r.RUnlock()
 	return r.curBureau
 }
 
 // IsDismissing 正在解散中
 func (r *Room) IsDismissing() bool {
+	r.RLock()
+	defer r.RUnlock()
 	return r.askDismiss != nil && len(r.askDismiss) > 0
 }
 
@@ -138,6 +151,7 @@ func (r *Room) ConcludeGame(data []*proto.EndData, session *remote.Session) {
 	}
 }
 func (r *Room) resetRoom(session *remote.Session) error {
+	r.roomGeneration.Add(1)
 	r.createTime = time.Now()
 	r.lastNativeTime = time.Now()
 	r.roomDismissed = false
@@ -175,21 +189,27 @@ func (r *Room) UserEntryRoom(
 	session *remote.Session,
 	data *entity.User,
 ) *msError.Error {
+	r.Lock()
+	defer r.Unlock()
+	return r.userEntryRoomLocked(session, data)
+}
+
+func (r *Room) userEntryRoomLocked(
+	session *remote.Session,
+	data *entity.User,
+) *msError.Error {
 	if r.roomDismissed {
 		return biz.NotInRoom
 	}
 	user, ok := r.users[data.Uid]
 	//检查是否允许新用户进入
-	if !ok && !r.CanEnter() {
+	if !ok && !r.canEnterLocked() {
 		return biz.RoomPlayerCountFull
 	}
 	curUid := session.GetUid()
-	_, ok1 := r.kickSchedules[curUid]
-	if ok1 {
-		delete(r.kickSchedules, curUid)
-	}
+	r.cancelKickScheduleLocked(curUid)
 	//最多6人参加 0-5有6个号
-	chairID := r.getEmptyChairID(data.Uid, false)
+	chairID := r.getEmptyChairIDLocked(data.Uid, false)
 	if chairID < 0 {
 		return biz.RoomPlayerCountFull
 	}
@@ -212,6 +232,7 @@ func (r *Room) UserEntryRoom(
 		//2. 将房间号 推送给客户端 更新数据库 当前房间号存储起来
 		err := r.UpdateUserInfoRoomPush(session, data.Uid)
 		if err != nil {
+			r.rollbackNewUserEntryLocked(data.Uid)
 			return biz.SqlError
 		}
 	} else {
@@ -225,6 +246,14 @@ func (r *Room) UserEntryRoom(
 	//存储roomId和服务器的关系
 	err := r.RedisService.Store(r.Id, session.GetDst())
 	if err != nil {
+		if !ok {
+			r.rollbackNewUserEntryLocked(data.Uid)
+			if rollbackErr := r.UserService.UpdateUserRoomId(context.Background(), data.Uid, ""); rollbackErr != nil {
+				logs.Error("rollback user room id failed uid:%s err:%v", data.Uid, rollbackErr)
+			}
+			session.Put("roomId", "", stream.Single)
+			r.sendDataOne(proto.UpdateUserInfoPush(map[string]any{"roomID": ""}), data.Uid, session.GetMsg())
+		}
 		return biz.SqlError
 	}
 	//向其他玩家推送进入房间的消息
@@ -240,6 +269,16 @@ func (r *Room) UserEntryRoom(
 	r.GameFrame.OnEventUserEntry(user, session)
 	go r.addKickScheduleEvent(session, userInfo.Uid)
 	return nil
+}
+
+func (r *Room) rollbackNewUserEntryLocked(uid string) {
+	if _, exists := r.users[uid]; !exists {
+		return
+	}
+	delete(r.users, uid)
+	if r.currentUserCount > 0 {
+		r.currentUserCount--
+	}
 }
 
 func (r *Room) UpdateUserInfoRoomPush(session *remote.Session, uid string) error {
@@ -292,7 +331,7 @@ func (r *Room) ReceiveRoomMessage(session *remote.Session, req request.RoomMessa
 func (r *Room) getRoomSceneInfoPush(session *remote.Session) {
 	//
 	userInfoArr := make([]*proto.RoomUser, 0)
-	for _, v := range r.users {
+	for _, v := range r.GetUsers() {
 		userInfoArr = append(userInfoArr, v)
 	}
 	data := map[string]any{
@@ -313,74 +352,105 @@ func (r *Room) getRoomSceneInfoPush(session *remote.Session) {
 }
 
 func (r *Room) addKickScheduleEvent(session *remote.Session, uid string) {
-	if r.TryLock() {
-		defer r.Unlock()
-	}
+	r.Lock()
+	defer r.Unlock()
 	roomUser, hasUser := r.users[uid]
-	if !hasUser {
+	if !hasUser || roomUser == nil || roomUser.UserInfo == nil {
 		return
 	}
 	if r.hasStartedOneBureau {
 		return
 	}
-	_, ok := r.kickSchedules[roomUser.UserInfo.Uid]
-	if ok {
-		delete(r.kickSchedules, roomUser.UserInfo.Uid)
-	}
-	r.kickSchedules[roomUser.UserInfo.Uid] = time.AfterFunc(30*time.Second, func() {
+	userUID := roomUser.UserInfo.Uid
+	r.cancelKickScheduleLocked(userUID)
+	r.kickSchedules[userUID] = time.AfterFunc(30*time.Second, func() {
+		r.Lock()
+		currentUser := r.users[userUID]
+		shouldStart := false
+		shouldDismiss := false
 		//需要判断用户是否该踢出
-		if !r.hasStartedOneBureau && roomUser != nil && roomUser.UserStatus&enums.Ready == 0 {
-			r.kickUser(roomUser, session)
-			if r.efficacyStartRoom() {
-				r.startGame(session, roomUser)
-			}
+		if !r.hasStartedOneBureau && currentUser != nil && currentUser.UserStatus&enums.Ready == 0 {
+			r.kickUserLocked(currentUser, session)
+			shouldStart = r.efficacyStartRoom()
 			//踢出房间之后，需要判断是否可以解散房间
-			if r.efficacyDismissRoom() {
-				r.DismissRoom(session, enums.DismissNone)
-			}
+			shouldDismiss = r.efficacyDismissRoom()
 		}
-		_, ok1 := r.kickSchedules[roomUser.UserInfo.Uid]
-		if ok1 {
-			//执行过后 直接删除即可
-			delete(r.kickSchedules, roomUser.UserInfo.Uid)
+		delete(r.kickSchedules, userUID)
+		r.Unlock()
+		if shouldStart {
+			r.startGame(session, currentUser)
+		}
+		if shouldDismiss {
+			r.DismissRoom(session, enums.DismissNone)
 		}
 	})
 }
 
+func (r *Room) cancelKickScheduleLocked(uid string) {
+	if timer, ok := r.kickSchedules[uid]; ok {
+		timer.Stop()
+		delete(r.kickSchedules, uid)
+	}
+}
+
 func (r *Room) kickUser(user *proto.RoomUser, session *remote.Session) {
-	if r.TryLock() {
-		defer r.Unlock()
+	r.Lock()
+	defer r.Unlock()
+	r.kickUserLocked(user, session)
+}
+
+func (r *Room) kickUserLocked(user *proto.RoomUser, session *remote.Session) {
+	if user == nil || user.UserInfo == nil {
+		return
+	}
+	current, ok := r.users[user.UserInfo.Uid]
+	if !ok || current != user {
+		return
 	}
 	if r.gameStarted {
 		r.GameFrame.OnEventUserOffLine(user, session)
 	}
 	r.userLeaveRoomNotify([]*proto.RoomUser{user}, session)
 	//通知其他人用户离开房间
-	r.sendData(proto.UserLeaveRoomPushData(user), session.GetMsg())
+	r.sendDataLocked(proto.UserLeaveRoomPushData(user), session.GetMsg())
 	delete(r.users, user.UserInfo.Uid)
-	r.currentUserCount--
-	//关于此用户的定时器停止
-	_, ok := r.kickSchedules[user.UserInfo.Uid]
-	if ok {
-		delete(r.kickSchedules, user.UserInfo.Uid)
+	if r.currentUserCount > 0 {
+		r.currentUserCount--
 	}
+	//关于此用户的定时器停止
+	r.cancelKickScheduleLocked(user.UserInfo.Uid)
 }
 
 func (r *Room) DismissRoom(session *remote.Session, reason enums.RoomDismissReason) {
-	if r.TryLock() {
-		defer r.Unlock()
-	}
-	if r.roomDismissed {
+	generation := r.roomGeneration.Load()
+	r.Lock()
+	if !r.beginDismissLocked(generation) {
+		r.Unlock()
 		return
 	}
-	r.roomDismissed = true
-	//将redis中房间信息删除掉
+	// Prepare the result while the room snapshot is stable, then release the
+	// room lock before the game callback reads that snapshot through RoomFrame.
 	r.RedisService.Delete(r.Id)
-	//解散 将union当中存储的room信息 删除掉
 	r.cancelAllScheduler()
 	r.createHongBaoList()
-	// 获取并存储游戏数据
 	r.recordAllDrawResult(session)
+	r.Unlock()
+	r.destroyRoom(reason, session)
+	r.Lock()
+	defer r.Unlock()
+	r.dismissRoomLocked(session, reason)
+}
+
+func (r *Room) beginDismissLocked(generation uint64) bool {
+	if r.roomDismissed || generation != r.roomGeneration.Load() {
+		return false
+	}
+	r.roomDismissed = true
+	return true
+}
+
+func (r *Room) dismissRoomLocked(session *remote.Session, reason enums.RoomDismissReason) {
+	//解散 将union当中存储的room信息 删除掉
 	//获取并存储房间的数据
 	if r.currentUserCount == 0 ||
 		reason == enums.UnionOwnerDismiss ||
@@ -392,38 +462,45 @@ func (r *Room) DismissRoom(session *remote.Session, reason enums.RoomDismissReas
 		}
 		r.userLeaveRoomNotify(users, session)
 		r.union.DestroyRoom(r.Id)
-		r.destroyRoom(reason, session)
-		r.sendData(proto.RoomDismissPushData(reason), session.GetMsg())
+		r.sendDataLocked(proto.RoomDismissPushData(reason), session.GetMsg())
 	} else {
 		// 清除掉线玩家
-		r.clearOfflineUser(session)
+		r.clearOfflineUserLocked(session)
 		if r.currentUserCount == 0 {
 			r.union.DestroyRoom(r.Id)
-			r.destroyRoom(reason, session)
 			return
 		}
 		r.notifyUpdateAllUserInfo(session)
-		r.destroyRoom(reason, session)
-		r.sendData(proto.RoomDismissPushData(reason), session.GetMsg())
+		r.sendDataLocked(proto.RoomDismissPushData(reason), session.GetMsg())
 		r.resetRoom(session)
 	}
 }
 
 func (r *Room) cancelAllScheduler() {
-	if r.answerExitSchedule != nil {
-		r.stopAnswerSchedules <- struct{}{}
-	}
-	if r.startSchedulerID != nil {
-		r.stopStartSchedulerID <- struct{}{}
-	}
+	r.stopAnswerScheduleLocked()
+	r.stopStartScheduleLocked()
 	//需要将房间所有的任务 都取消掉
-	for uid, _ := range r.kickSchedules {
+	for uid, timer := range r.kickSchedules {
+		timer.Stop()
 		delete(r.kickSchedules, uid)
 	}
 }
 
+func (r *Room) stopAnswerScheduleLocked() {
+	if r.answerExitSchedule != nil {
+		r.answerExitSchedule.Stop()
+		r.answerExitSchedule = nil
+	}
+}
+
+func (r *Room) stopStartScheduleLocked() {
+	if r.startSchedulerID != nil {
+		r.startSchedulerID.Stop()
+		r.startSchedulerID = nil
+	}
+}
+
 func (r *Room) userReady(uid string, session *remote.Session) {
-	fmt.Println("userReady", uid)
 	if r.gameStarted {
 		return
 	}
@@ -511,17 +588,28 @@ func (r *Room) OtherUserEntryRoomPush(session *remote.Session, uid string) {
 }
 
 func (r *Room) AllUsers() []string {
+	r.RLock()
+	defer r.RUnlock()
+	return r.allUsersLocked()
+}
+
+func (r *Room) allUsersLocked() []string {
 	users := make([]string, 0)
 	for _, v := range r.users {
-		users = append(users, v.UserInfo.Uid)
+		if v != nil && v.UserInfo != nil {
+			users = append(users, v.UserInfo.Uid)
+		}
 	}
 	return users
 }
 
 func (r *Room) getEmptyChairID(uid string, isWatch bool) int {
-	if r.TryLock() {
-		defer r.Unlock()
-	}
+	r.RLock()
+	defer r.RUnlock()
+	return r.getEmptyChairIDLocked(uid, isWatch)
+}
+
+func (r *Room) getEmptyChairIDLocked(uid string, isWatch bool) int {
 	user, ok := r.users[uid]
 	if ok {
 		return user.ChairID
@@ -529,24 +617,40 @@ func (r *Room) getEmptyChairID(uid string, isWatch bool) int {
 	isWatch = isWatch || r.hasStartedOneBureau
 	used := make(map[int]struct{})
 	for _, v := range r.users {
+		if v == nil {
+			continue
+		}
 		used[v.ChairID] = struct{}{}
 	}
 	chairID := 0
+	maxChairID := r.chairCount
 	if isWatch {
 		chairID = r.chairCount
+		maxChairID += 20
 	}
-	_, exist := used[chairID]
-	if exist {
+	for chairID < maxChairID {
+		if _, exist := used[chairID]; !exist {
+			return chairID
+		}
 		chairID++
 	}
-	return chairID
+	return -1
 }
 
 func (r *Room) IsStartGame() bool {
+	r.RLock()
+	defer r.RUnlock()
+	return r.isStartGameLocked()
+}
+
+func (r *Room) isStartGameLocked() bool {
 	//房间内准备的人数 已经大于等于 最小开始游戏人数
 	userReadyCount := 0
 	for _, v := range r.users {
-		if v.UserStatus == enums.Ready {
+		if v == nil {
+			continue
+		}
+		if v.UserStatus&enums.Ready > 0 {
 			userReadyCount++
 		}
 	}
@@ -568,8 +672,9 @@ func (r *Room) startGame(session *remote.Session, user *proto.RoomUser) {
 	if r.startSchedulerID != nil {
 		r.stopStartSchedulerID <- struct{}{}
 	}
-	for k, _ := range r.kickSchedules {
-		delete(r.kickSchedules, k)
+	for uid, timer := range r.kickSchedules {
+		timer.Stop()
+		delete(r.kickSchedules, uid)
 	}
 	if r.maxBureau > 0 {
 		//第一局游戏开局时收取房费
@@ -588,8 +693,12 @@ func (r *Room) startGame(session *remote.Session, user *proto.RoomUser) {
 			newError := msError.NewError(-1, errors.New("扣取房费失败，房间已解散"))
 			r.sendPopDialogContent(newError, r.getUids(), session)
 			r.DismissRoom(session, enums.UnionOwnerDismiss)
+			return
 		}
 		for _, v := range r.users {
+			if v == nil || v.UserInfo == nil {
+				continue
+			}
 			if v.ChairID >= r.chairCount {
 				continue
 			}
@@ -615,6 +724,9 @@ func (r *Room) startGame(session *remote.Session, user *proto.RoomUser) {
 }
 
 func NewRoom(roomId string, creatorInfo *proto.RoomCreator, rule proto.GameRule, u base.UnionBase, session *remote.Session) (*Room, error) {
+	if err := validateRoomConfig(roomId, creatorInfo, rule); err != nil {
+		return nil, err
+	}
 	r := &Room{
 		Id:                     roomId,
 		unionID:                creatorInfo.UnionID,
@@ -639,93 +751,128 @@ func NewRoom(roomId string, creatorInfo *proto.RoomCreator, rule proto.GameRule,
 	go r.stopSchedule()
 	return r, nil
 }
+
+func validateRoomConfig(roomId string, creatorInfo *proto.RoomCreator, rule proto.GameRule) error {
+	if roomId == "" {
+		return errors.New("room id is required")
+	}
+	if creatorInfo == nil {
+		return errors.New("room creator is required")
+	}
+	if rule.MaxPlayerCount < 1 {
+		return fmt.Errorf("invalid maxPlayerCount %d", rule.MaxPlayerCount)
+	}
+	if rule.MinPlayerCount < 1 || rule.MinPlayerCount > rule.MaxPlayerCount {
+		return fmt.Errorf("invalid minPlayerCount %d for maxPlayerCount %d", rule.MinPlayerCount, rule.MaxPlayerCount)
+	}
+	return nil
+}
 func (r *Room) GetHongBaoList() any {
-	return r.userGetHongBaoCountArr
+	r.RLock()
+	defer r.RUnlock()
+	return append([]int(nil), r.userGetHongBaoCountArr...)
 }
 func (r *Room) GetUsers() map[string]*proto.RoomUser {
-	return r.users
+	r.RLock()
+	defer r.RUnlock()
+	users := make(map[string]*proto.RoomUser, len(r.users))
+	for uid, user := range r.users {
+		if user == nil || user.UserInfo == nil {
+			continue
+		}
+		users[uid] = user
+	}
+	return users
 }
 func (r *Room) GetId() string {
 	return r.Id
 }
 func (r *Room) GameMessageHandle(session *remote.Session, msg []byte) {
 	//需要游戏去处理具体的消息
+	r.RLock()
 	user, ok := r.users[session.GetUid()]
+	r.RUnlock()
 	if !ok {
 		return
 	}
-	r.GameFrame.GameMessageHandle(user, session, msg)
+	r.RunGameAction(func() {
+		r.GameFrame.GameMessageHandle(user, session, msg)
+	})
+}
+
+func (r *Room) RunGameAction(action func()) {
+	if action == nil {
+		return
+	}
+	r.gameActionMu.Lock()
+	defer r.gameActionMu.Unlock()
+	action()
 }
 
 func (r *Room) askForDismiss(session *remote.Session, uid string, exist any) {
-	if r.TryLock() {
-		defer r.Unlock()
-	}
-	askUser := r.users[uid]
-	if askUser.UserStatus&enums.Dismiss == 0 || askUser.ChairID >= r.chairCount {
-		r.userLeaveRoomRequest(session)
+	vote, hasVote := exist.(bool)
+	if exist != nil && !hasVote {
 		return
 	}
+	r.Lock()
+	askUser := r.users[uid]
+	if askUser == nil {
+		r.Unlock()
+		return
+	}
+	if askUser.UserStatus&enums.Dismiss == 0 || askUser.ChairID < 0 || askUser.ChairID >= r.chairCount {
+		r.Unlock()
+		if session != nil {
+			r.userLeaveRoomRequest(session)
+		}
+		return
+	}
+	shouldDismiss := r.askForDismissLocked(session, askUser, exist, vote, hasVote)
+	r.Unlock()
+	if shouldDismiss {
+		r.DismissRoom(session, enums.UserDismiss)
+	}
+}
+
+func (r *Room) askForDismissLocked(session *remote.Session, askUser *proto.RoomUser, exist any, vote, hasVote bool) bool {
 	//所有同意座次的数组
-	if (r.askDismiss == nil || len(r.askDismiss) == 0) && (exist != nil && exist.(bool)) {
+	if (r.askDismiss == nil || len(r.askDismiss) == 0) && hasVote && vote {
 		//同意解散
-		if r.askDismiss == nil {
-			r.askDismiss = make([]any, r.chairCount)
-		}
-		for i := 0; i < r.chairCount; i++ {
-			r.askDismiss[i] = nil
-		}
+		r.askDismiss = make([]any, r.chairCount)
 		r.dismissTick = proto.ExitWaitSecond
 		r.answerExitSchedule = tasks.NewTask("answerExitSchedule", 1*time.Second, func() {
-			r.dismissTick--
-			if r.dismissTick == 0 {
-				r.stopAnswerSchedules <- struct{}{}
-				for _, v := range r.users {
-					if v.UserStatus&enums.Dismiss > 0 && v.ChairID < r.chairCount {
-						r.askForDismiss(session, v.UserInfo.Uid, true)
-					}
-				}
-			}
+			r.onDismissTick(session)
 		})
 	}
-	if r.askDismiss == nil {
-		return
+	if r.askDismiss == nil || askUser.ChairID >= len(r.askDismiss) {
+		return false
 	}
 	if r.askDismiss[askUser.ChairID] != nil {
-		return
+		return false
 	}
 	r.askDismiss[askUser.ChairID] = exist
 
-	nameArr := make([]string, r.chairCount)
-	avatarArr := make([]string, r.chairCount)
-	onlineArr := make([]bool, len(r.users))
-	for _, v := range r.users {
-		if v.UserStatus&enums.Dismiss > 0 && v.ChairID < r.chairCount {
-			nameArr[v.ChairID] = v.UserInfo.Nickname
-			avatarArr[v.ChairID] = v.UserInfo.Avatar
-			onlineArr[v.ChairID] = v.UserStatus&enums.Offline == 0
-		}
-	}
-	for _, v := range r.users {
-		if v.UserStatus&enums.Dismiss > 0 && v.ChairID < r.chairCount {
-			data := proto.DismissPushData{
-				NameArr:    nameArr,
-				ChairIDArr: r.askDismiss,
-				AskChairId: askUser.ChairID,
-				OnlineArr:  onlineArr,
-				AvatarArr:  avatarArr,
-				Tm:         r.dismissTick,
+	nameArr, avatarArr, onlineArr := dismissUserArrays(r.users, r.chairCount)
+	if session != nil {
+		for _, v := range r.users {
+			if v.UserStatus&enums.Dismiss > 0 && v.ChairID < r.chairCount {
+				data := proto.DismissPushData{
+					NameArr:    nameArr,
+					ChairIDArr: append([]any(nil), r.askDismiss...),
+					AskChairId: askUser.ChairID,
+					OnlineArr:  onlineArr,
+					AvatarArr:  avatarArr,
+					Tm:         r.dismissTick,
+				}
+				r.sendDataOne(proto.AskForDismissPushData(&data), v.UserInfo.Uid, session.GetMsg())
 			}
-			r.sendDataOne(proto.AskForDismissPushData(&data), v.UserInfo.Uid, session.GetMsg())
 		}
 	}
 	//不同意直接取消解散申请
-	if exist != nil && !exist.(bool) {
-		if r.answerExitSchedule != nil {
-			r.stopAnswerSchedules <- struct{}{}
-		}
+	if hasVote && !vote {
+		r.stopAnswerScheduleLocked()
 		r.askDismiss = nil
-	} else if exist != nil && exist.(bool) {
+	} else if hasVote && vote {
 		playUserCount := 0
 		agreeDismissCount := 0
 		for _, v := range r.users {
@@ -737,16 +884,58 @@ func (r *Room) askForDismiss(session *remote.Session, uid string, exist any) {
 			}
 		}
 		if playUserCount == agreeDismissCount {
-			if r.answerExitSchedule != nil {
-				r.stopAnswerSchedules <- struct{}{}
-			}
-			r.DismissRoom(session, enums.UserDismiss)
+			r.stopAnswerScheduleLocked()
+			return true
 		}
 	}
+	return false
+}
+
+func (r *Room) onDismissTick(session *remote.Session) {
+	r.Lock()
+	if r.roomDismissed || r.askDismiss == nil {
+		r.stopAnswerScheduleLocked()
+		r.Unlock()
+		return
+	}
+	r.dismissTick--
+	if r.dismissTick > 0 {
+		r.Unlock()
+		return
+	}
+	uids := make([]string, 0, r.chairCount)
+	for _, user := range r.users {
+		if user != nil && user.UserInfo != nil && user.UserStatus&enums.Dismiss > 0 && user.ChairID >= 0 && user.ChairID < r.chairCount {
+			uids = append(uids, user.UserInfo.Uid)
+		}
+	}
+	r.stopAnswerScheduleLocked()
+	r.Unlock()
+	for _, uid := range uids {
+		r.askForDismiss(session, uid, true)
+	}
+}
+
+func dismissUserArrays(users map[string]*proto.RoomUser, chairCount int) ([]string, []string, []bool) {
+	nameArr := make([]string, chairCount)
+	avatarArr := make([]string, chairCount)
+	onlineArr := make([]bool, chairCount)
+	for _, user := range users {
+		if user == nil || user.UserInfo == nil || user.ChairID < 0 || user.ChairID >= chairCount || user.UserStatus&enums.Dismiss == 0 {
+			continue
+		}
+		nameArr[user.ChairID] = user.UserInfo.Nickname
+		avatarArr[user.ChairID] = user.UserInfo.Avatar
+		onlineArr[user.ChairID] = user.UserStatus&enums.Offline == 0
+	}
+	return nameArr, avatarArr, onlineArr
 }
 
 func (r *Room) sendData(data any, msg *stream.Msg) {
 	r.SendData(msg, r.AllUsers(), data)
+}
+func (r *Room) sendDataLocked(data any, msg *stream.Msg) {
+	r.SendData(msg, r.allUsersLocked(), data)
 }
 func (r *Room) sendDataOne(data any, uid string, msg *stream.Msg) {
 	r.SendData(msg, []string{uid}, data)
@@ -755,16 +944,31 @@ func (r *Room) sendDataMany(data any, uids []string, msg *stream.Msg) {
 	r.SendData(msg, uids, data)
 }
 func (r *Room) userLeaveRoomRequest(session *remote.Session) {
-	user, ok := r.users[session.GetUid()]
-	if ok {
-		if r.gameStarted &&
-			(user.UserStatus&enums.Playing != 0 && !r.GameFrame.IsUserEnableLeave(user.ChairID)) {
-			r.sendPopDialogContent(biz.CanNotLeaveRoom, []string{user.UserInfo.Uid}, session)
-			r.sendData(proto.UserLeaveRoomResponsePushData(user.ChairID), session.GetMsg())
-		} else {
-			r.userLeaveRoom(session)
+	uid := session.GetUid()
+	r.RLock()
+	user, ok := r.users[uid]
+	canLeave := ok && user != nil && user.UserInfo != nil
+	if canLeave && r.gameStarted && user.UserStatus&enums.Playing != 0 {
+		canLeave = r.GameFrame.IsUserEnableLeave(user.ChairID)
+	}
+	chairID := -1
+	userUID := ""
+	if ok && user != nil {
+		chairID = user.ChairID
+		if user.UserInfo != nil {
+			userUID = user.UserInfo.Uid
 		}
 	}
+	r.RUnlock()
+	if !ok || user == nil || user.UserInfo == nil {
+		return
+	}
+	if !canLeave {
+		r.sendPopDialogContent(biz.CanNotLeaveRoom, []string{userUID}, session)
+		r.sendData(proto.UserLeaveRoomResponsePushData(chairID), session.GetMsg())
+		return
+	}
+	r.userLeaveRoom(session)
 }
 
 // userChangeSeat 玩家换座位
@@ -772,45 +976,55 @@ func (r *Room) userChangeSeat(session *remote.Session, fromChairID int, toChairI
 	if fromChairID < 0 || toChairID < 0 {
 		return
 	}
+	r.Lock()
 	user, ok := r.users[session.GetUid()]
-	if !ok {
+	if !ok || user == nil || user.UserInfo == nil {
+		r.Unlock()
 		return
 	}
-	if user.UserStatus == enums.Playing {
+	if user.UserStatus&enums.Playing > 0 {
 		//正在游戏不能换座位
+		r.Unlock()
 		return
 	}
-	if !r.gameStarted && user.UserStatus == enums.Ready {
+	if !r.gameStarted && user.UserStatus&enums.Ready > 0 {
 		//如果游戏未开始，且玩家已准备，则重置用户状态
 		user.UserStatus = enums.UserStatusNone
 	}
 	//目标位置有人 不能换座位
-	if r.getUserByChairID(toChairID) != nil {
+	if r.getUserByChairIDLocked(toChairID) != nil {
+		r.Unlock()
 		return
 	}
 	//判断用户是否有足够的积分
 	if toChairID < r.chairCount && user.UserInfo.Score < r.GameRule.ScoreLowLimit {
+		r.Unlock()
 		return
 	}
 	user.ChairID = toChairID
+	uid := user.UserInfo.Uid
+	r.Unlock()
 	//推送给所有用户
-	r.sendData(proto.GetUserChangeSeatPush(fromChairID, toChairID, user.UserInfo.Uid), session.GetMsg())
+	r.sendData(proto.GetUserChangeSeatPush(fromChairID, toChairID, uid), session.GetMsg())
 }
 
 func (r *Room) userChat(session *remote.Session, data request.RoomMessageData) {
+	r.RLock()
 	user, ok := r.users[session.GetUid()]
-	if !ok {
+	if !ok || user == nil {
+		r.RUnlock()
 		return
 	}
 	fromChairID := user.ChairID
-	r.SendDataAll(session.GetMsg(), proto.UserChatPushData(fromChairID, data.ToChairID, data.Msg))
+	r.RUnlock()
+	r.SendDataAll(session.GetMsg(), proto.UserChatPushData(fromChairID, data.ToChairID, data.Msg.Value()))
 
 }
 
 func (r *Room) userLeaveRoom(session *remote.Session) {
 	user, ok := r.users[session.GetUid()]
 	if !ok {
-		log.Printf("leave room fail,roomId:%s, not this user: %v\n", r.Id, user.UserInfo)
+		log.Printf("leave room fail,roomId:%s, not this user: %s\n", r.Id, session.GetUid())
 		return
 	}
 	//推送所有人 此用户离开
@@ -847,8 +1061,14 @@ func (r *Room) efficacyDismissRoom() bool {
 }
 
 func (r *Room) getUserByChairID(chairID int) *proto.RoomUser {
+	r.RLock()
+	defer r.RUnlock()
+	return r.getUserByChairIDLocked(chairID)
+}
+
+func (r *Room) getUserByChairIDLocked(chairID int) *proto.RoomUser {
 	for _, value := range r.users {
-		if value.ChairID == chairID {
+		if value != nil && value.ChairID == chairID {
 			return value
 		}
 	}
@@ -914,14 +1134,19 @@ func (r *Room) isShouldSchedulerStart() bool {
 
 // 正在解散中
 func (r *Room) isDismissing() bool {
-	if r.askDismiss == nil {
-		return false
-	}
-	return len(r.askDismiss) > 0
+	r.RLock()
+	defer r.RUnlock()
+	return r.askDismiss != nil && len(r.askDismiss) > 0
 }
 
 func (r *Room) CanEnter() bool {
-	hasEmpty := r.HasEmptyChair()
+	r.RLock()
+	defer r.RUnlock()
+	return r.canEnterLocked()
+}
+
+func (r *Room) canEnterLocked() bool {
+	hasEmpty := r.hasEmptyChairLocked()
 	canWatch := r.GameRule.CanWatch
 	canEnter := r.GameRule.CanEnter && (r.GameRule.GameType != enums.PDK)
 	if r.hasStartedOneBureau {
@@ -931,9 +1156,18 @@ func (r *Room) CanEnter() bool {
 }
 
 func (r *Room) HasEmptyChair() bool {
+	r.RLock()
+	defer r.RUnlock()
+	return r.hasEmptyChairLocked()
+}
+
+func (r *Room) hasEmptyChairLocked() bool {
 	seatCount := 0
 	for _, v := range r.users {
-		if v.ChairID == -1 {
+		if v == nil {
+			continue
+		}
+		if v.ChairID < 0 || v.ChairID >= r.chairCount {
 			continue
 		}
 		seatCount++
@@ -963,6 +1197,9 @@ func (r *Room) checkEntryRoom(userInfo *proto.UserInfo) *msError.Error {
 func (r *Room) sendDataExceptUid(data any, uid string, msg *stream.Msg) {
 	var uids []string
 	for _, v := range r.users {
+		if v == nil || v.UserInfo == nil {
+			continue
+		}
 		if v.UserInfo.Uid == uid {
 			continue
 		}
@@ -975,17 +1212,17 @@ func (r *Room) destroyRoom(reason enums.RoomDismissReason, session *remote.Sessi
 	r.GameFrame.OnEventRoomDismiss(reason, session)
 }
 
-func (r *Room) clearOfflineUser(session *remote.Session) {
+func (r *Room) clearOfflineUserLocked(session *remote.Session) {
 	for _, v := range r.users {
-		if v.UserStatus&enums.Offline != 0 {
-			r.kickUser(v, session)
+		if v != nil && v.UserStatus&enums.Offline != 0 {
+			r.kickUserLocked(v, session)
 		}
 	}
 }
 
 func (r *Room) notifyUpdateAllUserInfo(session *remote.Session) {
 	for _, v := range r.users {
-		if v.ChairID > r.chairCount {
+		if v == nil || v.UserInfo == nil || v.ChairID < 0 || v.ChairID >= r.chairCount {
 			continue
 		}
 		r.sendData(proto.UserInfoChangePushData(v.UserInfo), session.GetMsg())
@@ -1121,6 +1358,10 @@ func (r *Room) calculateRebateWhenStart(session *remote.Session) {
 			continue
 		}
 		newUserData := r.UserService.UpdateUserDataScoreInc(key, r.RoomCreator.UnionID, int(-count))
+		if newUserData == nil {
+			logs.Error("[Room] deduct fixed room fee failed uid:%s unionID:%d", key, r.RoomCreator.UnionID)
+			continue
+		}
 		r.updateRoomUserInfo(proto.BuildGameRoomUserInfoWithUnion(newUserData, r.RoomCreator.UnionID, session.GetMsg().ConnectorId), false, session)
 		r.updateUserDataNotify(map[string]any{
 			"unionInfo": newUserData.UnionInfo,
@@ -1132,6 +1373,10 @@ func (r *Room) calculateRebateWhenStart(session *remote.Session) {
 				newUnionInfo = v
 				break
 			}
+		}
+		if newUnionInfo == nil {
+			logs.Error("[Room] deducted user union info missing uid:%s unionID:%d", key, r.RoomCreator.UnionID)
+			continue
 		}
 		scoreChangeRecordArr = append(scoreChangeRecordArr, &entity.UserScoreChangeRecord{
 			CreateTime:       time.Now().UnixMilli(),
@@ -1175,6 +1420,10 @@ func (r *Room) calculateRebateWhenStart(session *remote.Session) {
 			},
 		}
 		newUserData := r.UserService.UpdateUserData(bson.M{"uid": unionOwnerUid, "unionInfo.unionID": r.RoomCreator.UnionID}, saveData)
+		if newUserData == nil {
+			logs.Error("[Room] update union owner rebate failed uid:%s unionID:%d", unionOwnerUid, r.RoomCreator.UnionID)
+			return
+		}
 		if newUserData.FrontendId != "" {
 			r.UserService.UpdateUserDataNotify(newUserData.Uid, newUserData.FrontendId, map[string]any{
 				"unionInfo": newUserData.UnionInfo,
@@ -1205,6 +1454,10 @@ func (r *Room) execRebate(unionID int64, roomId string, gameType enums.GameType,
 	userData, err := r.UserService.FindUserByUid(context.TODO(), spreaderID)
 	if err != nil {
 		logs.Error("FindUserByUid err : %v", err)
+		return
+	}
+	if userData == nil {
+		logs.Error("FindUserByUid returned nil uid:%s", spreaderID)
 		return
 	}
 	var unionInfo *entity.UnionInfo
@@ -1239,6 +1492,10 @@ func (r *Room) execRebate(unionID int64, roomId string, gameType enums.GameType,
 		}
 		matchData := bson.M{"unionInfo.unionID": unionID, "uid": spreaderID}
 		newUserData := r.UserService.UpdateUserData(matchData, saveData)
+		if newUserData == nil {
+			logs.Error("UpdateUserData rebate failed uid:%s unionID:%d", spreaderID, unionID)
+			return
+		}
 		r.updateUserDataNotify(map[string]any{"unionInfo": newUserData.UnionInfo}, session)
 		// 记录下级玩家贡献的的返利数
 		if lowUid != "" {
@@ -1324,6 +1581,10 @@ func (r *Room) recordOneDrawResult(dataArr []*proto.EndData, session *remote.Ses
 		}
 		matchData := bson.M{"unionInfo.unionID": r.RoomCreator.UnionID, "uid": uid}
 		newUserData := r.UserService.UpdateUserData(matchData, saveData)
+		if newUserData == nil {
+			logs.Error("UpdateUserData one-draw rebate failed uid:%s unionID:%d", uid, r.RoomCreator.UnionID)
+			continue
+		}
 		r.updateUserDataNotify(map[string]any{"unionInfo": newUserData.UnionInfo}, session)
 		r.updateRoomUserInfo(proto.BuildGameRoomUserInfoWithUnion(newUserData, r.RoomCreator.UnionID, session.GetMsg().ConnectorId), false, session)
 		r.execRebate(r.RoomCreator.UnionID, r.Id, r.GameRule.GameType, user.UserInfo, nil, "", uid, rebateCount, false, true, session)
@@ -1450,11 +1711,16 @@ func (r *Room) stopSchedule() {
 }
 
 func (r *Room) GetRoomInfo() *proto.RoomInfo {
+	r.RLock()
+	defer r.RUnlock()
 	if r.roomDismissed {
 		return nil
 	}
 	var roomUserInfoArr []*proto.UserRoomData
 	for _, v := range r.users {
+		if v == nil || v.UserInfo == nil {
+			continue
+		}
 		if v.ChairID >= r.chairCount {
 			continue
 		}
@@ -1474,6 +1740,8 @@ func (r *Room) GetRoomInfo() *proto.RoomInfo {
 }
 
 func (r *Room) IsUserInRoom(uid string) bool {
+	r.RLock()
+	defer r.RUnlock()
 	if r.roomDismissed {
 		return false
 	}
@@ -1504,7 +1772,7 @@ func (r *Room) createHongBaoList() {
 			arr = append(arr, -1)
 			continue
 		}
-		user := r.getUserByChairID(i)
+		user := r.getUserByChairIDLocked(i)
 		if user == nil {
 			arr = append(arr, -1)
 			continue
@@ -1532,6 +1800,9 @@ func (r *Room) createHongBaoList() {
 func (r *Room) getUids() []string {
 	var uids []string
 	for _, v := range r.users {
+		if v == nil || v.UserInfo == nil {
+			continue
+		}
 		uids = append(uids, v.UserInfo.Uid)
 	}
 	return uids
@@ -1548,7 +1819,11 @@ func (r *Room) collectionRoomRentWhenStart(session *remote.Session) error {
 					},
 				}
 				matchData := bson.M{"uid": key}
-				newUserDataArr = append(newUserDataArr, r.UserService.UpdateUserData(matchData, savaData))
+				updated := r.UserService.UpdateUserData(matchData, savaData)
+				if updated == nil {
+					return biz.SqlError
+				}
+				newUserDataArr = append(newUserDataArr, updated)
 			}
 			for _, updateUserData := range newUserDataArr {
 				if updateUserData.FrontendId != "" {
@@ -1557,6 +1832,9 @@ func (r *Room) collectionRoomRentWhenStart(session *remote.Session) error {
 			}
 		} else if r.GameRule.PayType == enums.MyPay {
 			newUserData := r.UserService.UpdateUserData(bson.M{"uid": r.RoomCreator.Uid}, bson.M{"$inc": bson.M{"gold": -r.GameRule.PayDiamond}})
+			if newUserData == nil {
+				return biz.NotEnoughGold
+			}
 			if newUserData.FrontendId != "" {
 				r.UserService.UpdateUserDataNotify(newUserData.Uid, newUserData.FrontendId, map[string]any{"gold": newUserData.Gold}, session)
 			}
@@ -1575,6 +1853,10 @@ func (r *Room) collectionRoomRentWhenStart(session *remote.Session) error {
 				return nil
 			}
 			payDiamondCount := proto.OneUserDiamondCount(r.GameRule.Bureau, r.GameRule.GameType) * costUserCount
+			if payDiamondCount <= 0 {
+				logs.Error("unsupported room rent rule gameType:%d bureau:%d", r.GameRule.GameType, r.GameRule.Bureau)
+				return biz.RequestDataError
+			}
 			matchData := bson.M{
 				"uid": r.union.GetOwnerUid(),
 			}
@@ -1603,33 +1885,8 @@ func (r *Room) recordAllDrawResult(session *remote.Session) {
 	if r.RoomCreator.CreatorType == enums.UnionCreatorType {
 		var rebateList = make(map[string]int)
 		var avgRebateCount int64
-		var allPlayedUserArr map[string]*proto.RoomUser
+		allPlayedUserArr := r.allPlayedUsersLocked()
 		var invalidRebateUserArr []string
-		for key, user := range r.users {
-			if allPlayedUserArr[key] == nil {
-				if utils.IndexOf(r.alreadyCostUserUidArr, key) == -1 {
-					continue
-				}
-				allPlayedUserArr[key] = user
-			}
-		}
-		for key, clearUser := range r.clearUserArr {
-			if allPlayedUserArr[key] == nil {
-				if utils.IndexOf(r.alreadyCostUserUidArr, key) == -1 {
-					continue
-				}
-				allPlayedUserArr[key] = &proto.RoomUser{
-					Uid:      key,
-					WinScore: int(clearUser.Score),
-					UserInfo: &proto.UserInfo{
-						Uid:        key,
-						Nickname:   clearUser.Nickname,
-						SpreaderID: clearUser.SpreaderID,
-						Avatar:     clearUser.Avatar,
-					},
-				}
-			}
-		}
 		if r.GameRule.RoomPayRule.RebateType != enums.One {
 			rebateList = r.calculateRebate(r.users)
 			if r.GameRule.RoomPayRule.IsAvg {
@@ -1691,6 +1948,10 @@ func (r *Room) recordAllDrawResult(session *remote.Session) {
 				saveData["$inc"].(bson.M)["unionInfo.$.score"] = i.(int) + hongBaoCount
 			}
 			newUserData := r.UserService.UpdateUserData(bson.M{"unionInfo.unionID": r.RoomCreator.UnionID, "uid": key}, saveData)
+			if newUserData == nil {
+				logs.Error("[Room] update game result score failed uid:%s unionID:%d", key, r.RoomCreator.UnionID)
+				continue
+			}
 			if newUserData.FrontendId != "" {
 				r.UserService.UpdateUserDataNotify(newUserData.Uid, newUserData.FrontendId, map[string]any{
 					"unionInfo": newUserData.UnionInfo,
@@ -1702,6 +1963,10 @@ func (r *Room) recordAllDrawResult(session *remote.Session) {
 					newUnionInfo = v
 					break
 				}
+			}
+			if newUnionInfo == nil {
+				logs.Error("[Room] game result union info missing uid:%s unionID:%d", key, r.RoomCreator.UnionID)
+				continue
 			}
 			if rebateCount > 0 {
 				scoreChangeRecordArr = append(scoreChangeRecordArr, &entity.UserScoreChangeRecord{
@@ -1803,4 +2068,29 @@ func (r *Room) recordAllDrawResult(session *remote.Session) {
 		savaData.CreatorUid = r.RoomCreator.Uid
 	}
 	r.UserService.SaveUserGameRecord(savaData)
+}
+
+func (r *Room) allPlayedUsersLocked() map[string]*proto.RoomUser {
+	result := make(map[string]*proto.RoomUser)
+	for key, user := range r.users {
+		if user != nil && utils.IndexOf(r.alreadyCostUserUidArr, key) != -1 {
+			result[key] = user
+		}
+	}
+	for key, clearUser := range r.clearUserArr {
+		if clearUser == nil || result[key] != nil || utils.IndexOf(r.alreadyCostUserUidArr, key) == -1 {
+			continue
+		}
+		result[key] = &proto.RoomUser{
+			Uid:      key,
+			WinScore: int(clearUser.Score),
+			UserInfo: &proto.UserInfo{
+				Uid:        key,
+				Nickname:   clearUser.Nickname,
+				SpreaderID: clearUser.SpreaderID,
+				Avatar:     clearUser.Avatar,
+			},
+		}
+	}
+	return result
 }

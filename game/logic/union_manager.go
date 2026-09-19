@@ -4,23 +4,25 @@ import (
 	"common/biz"
 	"core/models/entity"
 	"core/service"
+	cryptorand "crypto/rand"
 	"fmt"
 	"framework/msError"
 	"framework/remote"
 	"game/component/room"
-	"math/rand"
+	"math/big"
 	"sync"
-	"time"
 )
 
 type UnionManager struct {
 	sync.RWMutex
-	unionList map[int64]*Union
+	unionList       map[int64]*Union
+	reservedRoomIDs map[string]struct{}
 }
 
 func NewUnionManager() *UnionManager {
 	return &UnionManager{
-		unionList: make(map[int64]*Union),
+		unionList:       make(map[int64]*Union),
+		reservedRoomIDs: make(map[string]struct{}),
 	}
 }
 
@@ -29,7 +31,7 @@ func (u *UnionManager) GetUnion(unionId int64,
 	userService *service.UserService,
 	unionService *service.UnionService) *Union {
 	u.Lock()
-	u.Unlock()
+	defer u.Unlock()
 	union, ok := u.unionList[unionId]
 	if ok {
 		return union
@@ -41,30 +43,60 @@ func (u *UnionManager) GetUnion(unionId int64,
 }
 
 func (u *UnionManager) CreateRoomId() string {
-	//随机数的方式去创建
-	roomId := u.genRoomId()
-	for _, v := range u.unionList {
-		_, ok := v.RoomList[roomId]
-		if ok {
-			return u.CreateRoomId()
+	u.Lock()
+	defer u.Unlock()
+	if u.reservedRoomIDs == nil {
+		u.reservedRoomIDs = make(map[string]struct{})
+	}
+	for {
+		roomId := u.genRoomId()
+		if _, reserved := u.reservedRoomIDs[roomId]; reserved {
+			continue
+		}
+		collision := false
+		for _, v := range u.unionList {
+			v.RLock()
+			if _, ok := v.RoomList[roomId]; ok {
+				collision = true
+			}
+			v.RUnlock()
+			if collision {
+				break
+			}
+		}
+		if !collision {
+			u.reservedRoomIDs[roomId] = struct{}{}
+			return roomId
 		}
 	}
-	return roomId
+}
+
+func (u *UnionManager) releaseRoomID(roomID string) {
+	u.Lock()
+	delete(u.reservedRoomIDs, roomID)
+	u.Unlock()
 }
 
 func (u *UnionManager) genRoomId() string {
-	rand.New(rand.NewSource(time.Now().UnixNano()))
-	//房间号是6位数
-	roomIdInt := rand.Int63n(999999)
-	if roomIdInt < 100000 {
-		roomIdInt += 100000
+	// Room IDs are six digits. Use a fresh cryptographically random value so
+	// concurrent room creation does not share a global pseudo-random source.
+	const roomIDRange = int64(900000)
+	n, err := cryptorand.Int(cryptorand.Reader, big.NewInt(roomIDRange))
+	if err != nil {
+		// crypto/rand failure is exceptionally rare; preserve the six-digit
+		// contract with a time-independent deterministic fallback.
+		return "100000"
 	}
-	return fmt.Sprintf("%d", roomIdInt)
+	return fmt.Sprintf("%06d", n.Int64()+100000)
 }
 
 func (u *UnionManager) GetRoomById(roomId string) *room.Room {
+	u.RLock()
+	defer u.RUnlock()
 	for _, v := range u.unionList {
+		v.RLock()
 		r, ok := v.RoomList[roomId]
+		v.RUnlock()
 		if ok {
 			return r
 		}
@@ -89,10 +121,15 @@ func (u *UnionManager) IsUserInRoom(roomId string, uid string) bool {
 }
 
 func (u *UnionManager) getUnionByRoomID(roomId string) *Union {
+	u.RLock()
+	defer u.RUnlock()
 	for _, v := range u.unionList {
+		v.RLock()
 		if v.RoomList[roomId] != nil {
+			v.RUnlock()
 			return v
 		}
+		v.RUnlock()
 	}
 	return nil
 }

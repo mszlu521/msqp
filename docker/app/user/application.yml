@@ -17,7 +17,7 @@ db:
   mongo:
     url: mongodb://mongo-qp:27017
     userName: root
-    password: mszlu!@#987432@#
+    password: root123456
     minPoolSize: 10
     maxPoolSize: 100
     db: msqp

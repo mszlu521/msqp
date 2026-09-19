@@ -3,6 +3,7 @@ package node
 import (
 	"common/logs"
 	"encoding/json"
+	"errors"
 	"framework/pusher"
 	"framework/remote"
 	"framework/stream"
@@ -41,8 +42,11 @@ func (a *App) readChanMsg(serverId string) {
 	for {
 		select {
 		case msg := <-a.readChan:
-			var remoteMsg stream.Msg
-			json.Unmarshal(msg, &remoteMsg)
+			remoteMsg, err := decodeRemoteMessage(msg)
+			if err != nil {
+				logs.Error("app decode remote message failed,err:%v", err)
+				continue
+			}
 			logs.Warn("app readChanMsg:%v", string(remoteMsg.Body.Data))
 			session := remote.NewSession(a.remoteCli, &remoteMsg)
 			session.SetServerId(serverId)
@@ -73,6 +77,17 @@ func (a *App) readChanMsg(serverId string) {
 		}
 	}
 
+}
+
+func decodeRemoteMessage(data []byte) (stream.Msg, error) {
+	var msg stream.Msg
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return stream.Msg{}, err
+	}
+	if msg.Body == nil {
+		return stream.Msg{}, errors.New("remote message body is required")
+	}
+	return msg, nil
 }
 
 func (a *App) writeChanMsg() {

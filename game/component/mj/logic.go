@@ -92,6 +92,8 @@ func (l *Logic) getCards(num int) []mp.CardID {
 }
 
 func (l *Logic) getRestCardsCount() int {
+	l.RLock()
+	defer l.RUnlock()
 	return len(l.cards)
 }
 
@@ -132,10 +134,14 @@ func (l *Logic) getOperateArray(cards []mp.CardID, outCard mp.CardID) []OperateT
 }
 
 func (l *Logic) getRestCards() []mp.CardID {
-	return l.cards
+	l.RLock()
+	defer l.RUnlock()
+	return append([]mp.CardID(nil), l.cards...)
 }
 
 func (l *Logic) getCard(card mp.CardID) mp.CardID {
+	l.Lock()
+	defer l.Unlock()
 	indexOf := alg.IndexOf(l.cards, card)
 	if indexOf == -1 {
 		return 0
@@ -155,7 +161,37 @@ func (l *Logic) getCardCount(cardIDS []mp.CardID, card mp.CardID) int {
 }
 
 func (l *Logic) canHuQidui(cards []mp.CardID, card mp.CardID) bool {
-	return false
+	allCards := make([]mp.CardID, 0, len(cards)+1)
+	allCards = append(allCards, cards...)
+	allCards = append(allCards, card)
+	if len(allCards) != 14 {
+		return false
+	}
+
+	counts := make(map[mp.CardID]int)
+	hongZhongCount := 0
+	for _, value := range allCards {
+		if value == Zhong {
+			hongZhongCount++
+			continue
+		}
+		counts[value]++
+	}
+
+	pairs := 0
+	singles := 0
+	for _, count := range counts {
+		pairs += count / 2
+		singles += count % 2
+	}
+	// Each odd tile consumes one Hong Zhong first. Remaining Hong Zhong tiles
+	// can form pairs on their own, which also handles four-of-a-kind pairs.
+	if hongZhongCount < singles {
+		return false
+	}
+	pairs += singles
+	pairs += (hongZhongCount - singles) / 2
+	return pairs >= 7
 }
 
 // 获取玩家所有马牌

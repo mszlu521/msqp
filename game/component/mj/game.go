@@ -23,6 +23,7 @@ type GameFrame struct {
 	gameType                GameType
 	logic                   *Logic
 	baseScore               int
+	chairCount              int
 	trustTm                 int
 	userWinRecord           map[string]*UserWinRecord
 	userTrustArray          []bool
@@ -58,11 +59,14 @@ type GameFrame struct {
 	stopUserTrustSchedule   chan struct{}
 }
 
-var PlayerCount = 4
-
 func (g *GameFrame) GetGameBureauData() any {
+	g.RLock()
+	defer g.RUnlock()
 	var gameData [][]*BureauReview
 	for _, v := range g.reviewRecord {
+		if v == nil {
+			continue
+		}
 		var bureauReview []*BureauReview
 		for _, user := range v.UserArray {
 			bureauReview = append(bureauReview, &BureauReview{
@@ -79,14 +83,21 @@ func (g *GameFrame) GetGameBureauData() any {
 }
 
 func (g *GameFrame) GetGameVideoData() any {
-	if len(g.reviewRecord) <= 0 {
+	g.RLock()
+	defer g.RUnlock()
+	if len(g.reviewRecord) == 0 {
 		return nil
 	}
-	lastItem := g.reviewRecord[len(g.reviewRecord)-1]
-	if lastItem != nil && lastItem.Result == nil {
-		g.reviewRecord = g.reviewRecord[:len(g.reviewRecord)-1]
+	completed := make([]*ReviewRecord, 0, len(g.reviewRecord))
+	for _, record := range g.reviewRecord {
+		if record != nil && record.Result != nil {
+			completed = append(completed, record)
+		}
 	}
-	return g.reviewRecord
+	if len(completed) == 0 {
+		return nil
+	}
+	return completed
 }
 
 func (g *GameFrame) OnEventRoomDismiss(reason enums.RoomDismissReason, session *remote.Session) {
@@ -130,7 +141,7 @@ func (g *GameFrame) OnEventGameStart(user *proto.RoomUser, session *remote.Sessi
 }
 
 func (g *GameFrame) OnEventUserEntry(user *proto.RoomUser, session *remote.Session) {
-	//TODO implement me
+	// The room scene response already contains the user-filtered reconnect snapshot.
 }
 
 func (g *GameFrame) sendData(data any, users []string, session *remote.Session) {
@@ -143,7 +154,7 @@ func (g *GameFrame) sendDataAll(data any, session *remote.Session) {
 func (g *GameFrame) OnEventUserOffLine(user *proto.RoomUser, session *remote.Session) {
 	g.Lock()
 	defer g.Unlock()
-	if g.curChairID == user.ChairID {
+	if g.isPlayingUser(user) && g.curChairID == user.ChairID {
 		g.offlineUserAutoOperation(user, session)
 	}
 }
@@ -153,17 +164,18 @@ func (g *GameFrame) IsUserEnableLeave(chairID int) bool {
 }
 
 func (g *GameFrame) GetEnterGameData(session *remote.Session) any {
+	g.RLock()
+	defer g.RUnlock()
 	//获取场景 获取游戏的数据
 	//mj 打牌的时候 别人的牌 不能看到
+	if session == nil {
+		return nil
+	}
 	user := g.r.GetUsers()[session.GetUid()]
 	if user == nil {
 		return nil
 	}
 	chairID := user.ChairID
-	if g.curChairID == -1 {
-		//证明是第一个人进入 座次号分配给此人
-		g.curChairID = chairID
-	}
 	gameData := &GameData{
 		GameStatus:     g.gameStatus,
 		GameStarted:    g.gameStarted,
@@ -180,7 +192,7 @@ func (g *GameFrame) GetEnterGameData(session *remote.Session) any {
 		RestCardsCount: g.logic.getRestCardsCount(),
 		Result:         g.result,
 	}
-	if g.handCards[0] != nil {
+	if len(g.handCards) > 0 && g.handCards[0] != nil {
 		chairCount := g.getChairCount()
 		handCards := make([][]mp.CardID, chairCount)
 		for i := 0; i < chairCount; i++ {
@@ -207,14 +219,14 @@ func (g *GameFrame) GetEnterGameData(session *remote.Session) any {
 func (g *GameFrame) startGame(session *remote.Session) {
 	// 开始游戏
 	g.recordGameUserMsg()
-	g.scheduleOperate = make([]*tasks.Task, PlayerCount)
+	g.scheduleOperate = make([]*tasks.Task, g.chairCount)
 	if g.forcePrepareID != nil {
 		go func() {
 			g.stopForcePrepareChan <- struct{}{}
 		}()
 	}
 	g.gameStarted = true
-	g.trustTmArray = make([]int, PlayerCount)
+	g.trustTmArray = make([]int, g.chairCount)
 	if g.gameRule.CanTrust {
 		if g.userTrustSchedule != nil {
 			go func() {
@@ -222,21 +234,23 @@ func (g *GameFrame) startGame(session *remote.Session) {
 			}()
 		}
 		g.userTrustSchedule = tasks.NewTask("userTrustSchedule", time.Second, func() {
-			if g.r.IsDismissing() {
-				return
-			}
-			if g.gameStatus == Playing {
-				for i, v := range g.operateArrays {
-					if v != nil && len(v) > 0 && !g.userTrustArray[i] {
-						g.trustTmArray[i]++
-						if g.trustTmArray[i] > g.trustTm {
-							g.onGameTrust(i, session, MessageData{
-								Trust: true,
-							})
+			g.r.RunGameAction(func() {
+				if g.r.IsDismissing() {
+					return
+				}
+				if g.gameStatus == Playing {
+					for i, v := range g.operateArrays {
+						if v != nil && len(v) > 0 && !g.userTrustArray[i] {
+							g.trustTmArray[i]++
+							if g.trustTmArray[i] > g.trustTm {
+								g.onGameTrust(i, session, MessageData{
+									Trust: true,
+								})
+							}
 						}
 					}
 				}
-			}
+			})
 		})
 	}
 	//1 游戏状态 初始状态 推送
@@ -247,7 +261,10 @@ func (g *GameFrame) startGame(session *remote.Session) {
 	if g.r.GetCurBureau() == 0 {
 		g.bankerChairID = 0
 	} else {
-		lastReview := g.reviewRecord[len(g.reviewRecord)-1]
+		var lastReview *ReviewRecord
+		if len(g.reviewRecord) > 0 {
+			lastReview = g.reviewRecord[len(g.reviewRecord)-1]
+		}
 		if lastReview != nil && lastReview.Result != nil &&
 			len(lastReview.Result.WinChairIDArray) > 0 {
 			g.bankerChairID = lastReview.Result.WinChairIDArray[0]
@@ -270,7 +287,12 @@ func (g *GameFrame) startGame(session *remote.Session) {
 
 func (g *GameFrame) GameMessageHandle(user *proto.RoomUser, session *remote.Session, msg []byte) {
 	var req MessageReq
-	json.Unmarshal(msg, &req)
+	if err := json.Unmarshal(msg, &req); err != nil || user == nil {
+		return
+	}
+	if req.Type != GameChatNotify && req.Type != GameReviewNotify && !g.isPlayingUser(user) {
+		return
+	}
 	if req.Type == GameChatNotify {
 		g.onGameChat(user, session, req.Data)
 	} else if req.Type == GameTurnOperateNotify {
@@ -283,6 +305,10 @@ func (g *GameFrame) GameMessageHandle(user *proto.RoomUser, session *remote.Sess
 	} else if req.Type == GameReviewNotify {
 		g.onGameReview(user.ChairID, session, req.Data)
 	}
+}
+
+func (g *GameFrame) isPlayingUser(user *proto.RoomUser) bool {
+	return user != nil && user.ChairID >= 0 && user.ChairID < len(g.handCards) && (user.UserStatus&enums.Ready > 0 || user.UserStatus&enums.Playing > 0)
 }
 
 func (g *GameFrame) getAllUsers() []string {
@@ -301,6 +327,10 @@ func (g *GameFrame) sendHandCards(session *remote.Session) {
 	for i := 0; i < chairCount; i++ {
 		g.handCards[i] = g.logic.getCards(13)
 		user := g.getUserByChairID(i)
+		if user == nil || user.UserInfo == nil {
+			logs.Error("sendHandCards: missing user for chairID:%d", i)
+			return
+		}
 		userArray = append(userArray, proto.UserRoomData{
 			Avatar:   user.UserInfo.Avatar,
 			Nickname: user.UserInfo.Nickname,
@@ -350,15 +380,17 @@ func (g *GameFrame) sendHandCards(session *remote.Session) {
 	restCardsCount := g.logic.getRestCardsCount()
 	g.sendDataAll(GameRestCardsCountPushData(restCardsCount), session)
 	time.AfterFunc(time.Second, func() {
-		if g.isDismissed {
-			return
-		}
-		//7. 开始游戏状态推送
-		g.gameStatus = Playing
-		g.tick = 0
-		g.sendDataAll(GameStatusPushData(g.gameStatus, g.tick), session)
-		//玩家的操作时间了
-		g.setTurn(g.bankerChairID, session)
+		g.r.RunGameAction(func() {
+			if g.isDismissed {
+				return
+			}
+			//7. 开始游戏状态推送
+			g.gameStatus = Playing
+			g.tick = 0
+			g.sendDataAll(GameStatusPushData(g.gameStatus, g.tick), session)
+			//玩家的操作时间了
+			g.setTurn(g.bankerChairID, session)
+		})
 	})
 }
 
@@ -426,14 +458,16 @@ func (g *GameFrame) setTurn(chairID int, session *remote.Session) {
 			}()
 		}
 		g.turnSchedule = tasks.NewTask("turnSchedule", 1*time.Second, func() {
-			if g.r.IsDismissing() {
-				return
-			}
-			g.tick--
-			if g.tick <= 0 {
-				g.userAutoOperate(chairID, 0, session)
-				g.stopTurnScheduleChan <- struct{}{}
-			}
+			g.r.RunGameAction(func() {
+				if g.r.IsDismissing() {
+					return
+				}
+				g.tick--
+				if g.tick <= 0 {
+					g.userAutoOperate(chairID, 0, session)
+					g.stopTurnScheduleChan <- struct{}{}
+				}
+			})
 		})
 		//9. 剩余牌数推送
 		restCardsCount := g.logic.getRestCardsCount()
@@ -491,7 +525,7 @@ func (g *GameFrame) sortCard(chairID int) []mp.CardID {
 }
 
 func (g *GameFrame) onGameChat(user *proto.RoomUser, session *remote.Session, data MessageData) {
-	g.sendDataAll(GameChatPushData(user.ChairID, data.Type, data.Msg, data.RecipientID), session)
+	g.sendDataAll(GameChatPushData(user.ChairID, data.Type, data.Msg.Value(), data.RecipientID), session)
 }
 
 func (g *GameFrame) onGameTurnOperate(chairID int, session *remote.Session, data MessageData, auto bool) {
@@ -501,7 +535,10 @@ func (g *GameFrame) onGameTurnOperate(chairID int, session *remote.Session, data
 		g.trustTmArray[chairID] = 0
 	}
 
-	lastOperate := g.operateRecord[len(g.operateRecord)-1]
+	var lastOperate *OperateRecord
+	if len(g.operateRecord) > 0 {
+		lastOperate = g.operateRecord[len(g.operateRecord)-1]
+	}
 	if lastOperate != nil &&
 		lastOperate.ChairID == chairID &&
 		lastOperate.Operate == Qi &&
@@ -542,6 +579,9 @@ func (g *GameFrame) onGameTurnOperate(chairID int, session *remote.Session, data
 				data.Card = cards[len(cards)-1]
 			}
 		} else if HuZi == data.Operate {
+			if chairID < 0 || chairID >= len(g.handCards) || len(g.handCards[chairID]) == 0 {
+				return
+			}
 			data.Card = g.handCards[chairID][len(g.handCards[chairID])-1]
 		}
 	}
@@ -712,7 +752,7 @@ func (g *GameFrame) nextTurn(lastCard mp.CardID, session *remote.Session) {
 				g.operateArrays[i] = operateArray
 				tick := operateTm2
 				if g.scheduleOperate[i] != nil {
-					logs.Info("nextTurn---111g.scheduleOperate[i]================", i)
+					logs.Info("nextTurn---111 g.scheduleOperate[i] = %v", i)
 					go func() {
 						g.stopScheduleOperateChan <- i
 					}()
@@ -723,20 +763,22 @@ func (g *GameFrame) nextTurn(lastCard mp.CardID, session *remote.Session) {
 				localTick := tick
 
 				g.scheduleOperate[i] = tasks.NewTask("scheduleOperate", time.Second, func() {
-					if g.r.IsDismissing() {
-						return
-					}
-					localTick--
-					if localTick <= 0 {
-						g.stopScheduleOperateChan <- currentChairID
-						g.sendData(GameTurnOperatePushData(currentChairID, -1, Guo, false), []string{currentUser.UserInfo.Uid}, session)
-						g.operateRecord = append(g.operateRecord, &OperateRecord{currentChairID, nil, Guo})
+					g.r.RunGameAction(func() {
+						if g.r.IsDismissing() {
+							return
+						}
+						localTick--
+						if localTick <= 0 {
+							g.stopScheduleOperateChan <- currentChairID
+							g.sendData(GameTurnOperatePushData(currentChairID, -1, Guo, false), []string{currentUser.UserInfo.Uid}, session)
+							g.operateRecord = append(g.operateRecord, &OperateRecord{currentChairID, nil, Guo})
 
-						g.operateArrays[currentChairID] = nil
-						//倒计时结束 自动出牌 继续下一步
-						nextChairID := (g.curChairID + 1) % chairCount
-						g.setTurn(nextChairID, session)
-					}
+							g.operateArrays[currentChairID] = nil
+							//倒计时结束 自动出牌 继续下一步
+							nextChairID := (g.curChairID + 1) % chairCount
+							g.setTurn(nextChairID, session)
+						}
+					})
 				})
 				if g.userTrustArray[i] {
 					g.userAutoOperate(i, 0, session)
@@ -808,7 +850,7 @@ func (g *GameFrame) gameEnd(session *remote.Session) {
 			}
 		}
 	}
-	if lastOperate.Operate == HuZi {
+	if lastOperate != nil && lastOperate.Operate == HuZi {
 		for i := 0; i < chairCount; i++ {
 			if IndexOf(winChairIDArray, i) != -1 {
 				continue
@@ -827,7 +869,7 @@ func (g *GameFrame) gameEnd(session *remote.Session) {
 				scores[v] -= score / len(winChairIDArray)
 			}
 		}
-	} else if lastOperate.Operate == HuChi {
+	} else if lastOperate != nil && lastOperate.Operate == HuChi {
 		//抢杠
 		if g.gangChairID > -1 {
 			score := (-2 - maWinCount*2) * g.baseScore * (chairCount - 1) * len(winChairIDArray)
@@ -835,7 +877,7 @@ func (g *GameFrame) gameEnd(session *remote.Session) {
 				score = (-2 - maWinCount) * g.baseScore * (chairCount - 1) * len(winChairIDArray)
 			}
 			user := g.getUserByChairID(g.gangChairID)
-			if g.isUnionCreate() && score+user.UserInfo.Score < 0 {
+			if g.isUnionCreate() && user != nil && score+user.UserInfo.Score < 0 {
 				//不够赔付
 				score = -user.UserInfo.Score
 			}
@@ -844,13 +886,16 @@ func (g *GameFrame) gameEnd(session *remote.Session) {
 				scores[v] -= score / len(winChairIDArray)
 			}
 		} else {
+			if len(g.operateRecord) < 2 || g.operateRecord[len(g.operateRecord)-2] == nil {
+				return
+			}
 			loseChairID := g.operateRecord[len(g.operateRecord)-2].ChairID
 			score := (-1 - maWinCount*2) * g.baseScore
 			if g.gameRule.Ma == 1 {
 				score = (-1 - maWinCount) * g.baseScore
 			}
-			user := g.getUserByChairID(g.gangChairID)
-			if g.isUnionCreate() && score+user.UserInfo.Score < 0 {
+			user := g.getUserByChairID(loseChairID)
+			if g.isUnionCreate() && user != nil && score+user.UserInfo.Score < 0 {
 				//不够赔付
 				score = -user.UserInfo.Score
 			}
@@ -869,7 +914,7 @@ func (g *GameFrame) gameEnd(session *remote.Session) {
 						}
 						score := -2 * g.baseScore
 						user := g.getUserByChairID(j)
-						if score+scores[j]+user.UserInfo.Score < 0 {
+						if user != nil && score+scores[j]+user.UserInfo.Score < 0 {
 							score = -user.UserInfo.Score - scores[j]
 						}
 						scores[j] += score
@@ -888,8 +933,11 @@ func (g *GameFrame) gameEnd(session *remote.Session) {
 				//接杠
 				if g.isUnionCreate() {
 					score := -3 * g.baseScore
+					if i == 0 {
+						continue
+					}
 					user := g.getUserByChairID(g.operateRecord[i-1].ChairID)
-					if score+scores[g.operateRecord[i-1].ChairID]+user.UserInfo.Score < 0 {
+					if user != nil && score+scores[g.operateRecord[i-1].ChairID]+user.UserInfo.Score < 0 {
 						score = -user.UserInfo.Score - scores[g.operateRecord[i-1].ChairID]
 					}
 					scores[g.operateRecord[i-1].ChairID] += score
@@ -906,7 +954,7 @@ func (g *GameFrame) gameEnd(session *remote.Session) {
 						}
 						score := -1 * g.baseScore
 						user := g.getUserByChairID(j)
-						if score+scores[j]+user.UserInfo.Score < 0 {
+						if user != nil && score+scores[j]+user.UserInfo.Score < 0 {
 							score = -user.UserInfo.Score - scores[j]
 						}
 						scores[j] += score
@@ -942,9 +990,13 @@ func (g *GameFrame) gameEnd(session *remote.Session) {
 	var fangGangArray []int
 	for i := 0; i < len(g.operateRecord); i++ {
 		item := g.operateRecord[i]
-		if item.Operate == GangChi {
+		if item != nil && item.Operate == GangChi && i > 0 && g.operateRecord[i-1] != nil {
 			fangGangArray = append(fangGangArray, g.operateRecord[i-1].ChairID)
 		}
+	}
+	huType := OperateTypeNone
+	if lastOperate != nil {
+		huType = lastOperate.Operate
 	}
 	result := &GameResult{
 		Scores:          scores,
@@ -953,10 +1005,12 @@ func (g *GameFrame) gameEnd(session *remote.Session) {
 		WinChairIDArray: winChairIDArray,
 		FangGangArray:   fangGangArray,
 		RestCards:       g.logic.getRestCards(),
-		HuType:          lastOperate.Operate,
+		HuType:          huType,
 		GangChairID:     g.gangChairID,
 	}
-	g.reviewRecord[len(g.reviewRecord)-1].Result = result
+	if len(g.reviewRecord) > 0 {
+		g.reviewRecord[len(g.reviewRecord)-1].Result = result
+	}
 	g.resultRecord = append(g.resultRecord, result)
 	g.sendDataAll(GameResultPushData(result), session)
 	g.result = result
@@ -971,11 +1025,13 @@ func (g *GameFrame) gameEnd(session *remote.Session) {
 		}
 	}
 	time.AfterFunc(3*time.Second, func() {
-		if g.isDismissed {
-			return
-		}
-		g.r.ConcludeGame(endData, session)
-		g.resetGame(session)
+		g.r.RunGameAction(func() {
+			if g.isDismissed {
+				return
+			}
+			g.r.ConcludeGame(endData, session)
+			g.resetGame(session)
+		})
 	})
 	tick := 33
 	if g.r.GetCurBureau() != g.r.GetMaxBureau() {
@@ -985,25 +1041,27 @@ func (g *GameFrame) gameEnd(session *remote.Session) {
 			}()
 		}
 		g.forcePrepareID = tasks.NewTask("forcePrepareID", 1*time.Second, func() {
-			if g.r.IsDismissing() {
-				return
-			}
-			tick--
-			if tick <= 0 {
-				if g.gameStatus == GameStatusNone {
-					for _, user := range g.r.GetUsers() {
-						if user.UserStatus&enums.Ready > 0 {
-							//手动准备过，倒计时清零
-							g.trustTmArray[user.ChairID] = 0
-						}
-						if user.UserStatus&enums.Ready == 0 &&
-							g.gameStatus == GameStatusNone && !g.r.GetGameStarted() {
-							g.r.UserReady(user.UserInfo.Uid, session)
+			g.r.RunGameAction(func() {
+				if g.r.IsDismissing() {
+					return
+				}
+				tick--
+				if tick <= 0 {
+					if g.gameStatus == GameStatusNone {
+						for _, user := range g.r.GetUsers() {
+							if user.UserStatus&enums.Ready > 0 {
+								//手动准备过，倒计时清零
+								g.trustTmArray[user.ChairID] = 0
+							}
+							if user.UserStatus&enums.Ready == 0 &&
+								g.gameStatus == GameStatusNone && !g.r.GetGameStarted() {
+								g.r.UserReady(user.UserInfo.Uid, session)
+							}
 						}
 					}
+					g.stopForcePrepareChan <- struct{}{}
 				}
-				g.stopForcePrepareChan <- struct{}{}
-			}
+			})
 		})
 	}
 }
@@ -1019,15 +1077,18 @@ func (g *GameFrame) resetGame(session *remote.Session) {
 	g.sendDataAll(GameRestCardsCountPushData(restCardsCount), session)
 	g.curChairID = -1
 	g.gangChairID = -1
-	g.operateArrays = make([][]OperateType, PlayerCount)
+	g.operateArrays = make([][]OperateType, g.chairCount)
 	g.operateRecord = make([]*OperateRecord, 0)
-	g.handCards = make([][]mp.CardID, PlayerCount)
+	g.handCards = make([][]mp.CardID, g.chairCount)
 	g.result = nil
 }
 
 func (g *GameFrame) onGetCard(chairID int, session *remote.Session, data MessageData) {
 	g.Lock()
 	defer g.Unlock()
+	if chairID < 0 || chairID >= len(g.testCardArray) {
+		return
+	}
 	g.testCardArray[chairID] = data.Card
 }
 
@@ -1036,40 +1097,55 @@ func (g *GameFrame) userAutoOperate(chairID int, delayTime int, session *remote.
 		g.userAutoOperateSch = nil
 	}
 	g.userAutoOperateSch = time.AfterFunc(time.Duration(delayTime)*time.Second, func() {
-		if !g.isDismissed {
-			operateArray := g.operateArrays[chairID]
-			if len(operateArray) > 0 {
-				if IndexOf(operateArray, Qi) != -1 {
-					g.onGameTurnOperate(chairID,
-						session,
-						MessageData{
-							Operate: Qi,
-							Card:    g.handCards[chairID][len(g.handCards[chairID])-1],
-						}, true)
-				} else if IndexOf(operateArray, Guo) != -1 {
-					g.onGameTurnOperate(chairID,
-						session,
-						MessageData{
-							Operate: Guo,
-						}, true)
+		g.r.RunGameAction(func() {
+			if !g.isDismissed {
+				if chairID < 0 || chairID >= len(g.operateArrays) {
+					return
+				}
+				operateArray := g.operateArrays[chairID]
+				if len(operateArray) > 0 {
+					if IndexOf(operateArray, Qi) != -1 {
+						if chairID >= len(g.handCards) || len(g.handCards[chairID]) == 0 {
+							return
+						}
+						g.onGameTurnOperate(chairID,
+							session,
+							MessageData{
+								Operate: Qi,
+								Card:    g.handCards[chairID][len(g.handCards[chairID])-1],
+							}, true)
+					} else if IndexOf(operateArray, Guo) != -1 {
+						g.onGameTurnOperate(chairID,
+							session,
+							MessageData{
+								Operate: Guo,
+							}, true)
+					}
+				}
+				if g.gameStatus == GameStatusNone {
+					user := g.getUserByChairID(chairID)
+					if user != nil && (user.UserStatus&enums.Ready) == 0 {
+						g.r.UserReady(user.UserInfo.Uid, session)
+					}
 				}
 			}
-			if g.gameStatus == GameStatusNone {
-				user := g.getUserByChairID(chairID)
-				if user != nil && (user.UserStatus&enums.Ready) == 0 {
-					g.r.UserReady(user.UserInfo.Uid, session)
-				}
-			}
-		}
+		})
 	})
 }
 
 func (g *GameFrame) onGameTrust(chairID int, session *remote.Session, data MessageData) {
 	g.Lock()
 	defer g.Unlock()
+	if !g.gameRule.CanTrust || chairID < 0 || chairID >= len(g.userTrustArray) {
+		return
+	}
+	user := g.getUserByChairID(chairID)
+	if user == nil {
+		return
+	}
 	g.trustTmArray[chairID] = 0
 	g.userTrustArray[chairID] = data.Trust
-	uid := g.getUserByChairID(chairID).Uid
+	uid := user.Uid
 	g.sendData(GameTrustPushData(chairID, data.Trust), []string{uid}, session)
 	if data.Trust {
 		g.userAutoOperate(chairID, 0, session)
@@ -1090,8 +1166,12 @@ func (g *GameFrame) onGameReview(chairID int, session *remote.Session, data Mess
 }
 
 func (g *GameFrame) offlineUserAutoOperation(user *proto.RoomUser, session *remote.Session) {
-	//自动操作
-
+	if user == nil || user.ChairID < 0 || user.ChairID >= len(g.operateArrays) {
+		return
+	}
+	// Reuse the normal trust operation so a disconnected player takes the
+	// same legal fallback (draw/pass) as a trusted player.
+	g.userAutoOperate(user.ChairID, 0, session)
 }
 
 func (g *GameFrame) delCardFromArray(cards []mp.CardID, card mp.CardID, times int) []mp.CardID {
@@ -1106,7 +1186,7 @@ func (g *GameFrame) delCardFromArray(cards []mp.CardID, card mp.CardID, times in
 }
 
 func (g *GameFrame) getChairCount() int {
-	return len(g.r.GetUsers())
+	return g.chairCount
 }
 
 func (g *GameFrame) getZhongCount() int {
@@ -1225,7 +1305,11 @@ func NewGameFrame(rule proto.GameRule, r base.RoomFrame, session *remote.Session
 	if rule.BaseScore > 0 {
 		baseScore = rule.BaseScore
 	}
-	PlayerCount = rule.MaxPlayerCount
+	playerCount := rule.MaxPlayerCount
+	if playerCount <= 0 {
+		playerCount = 4
+		rule.MaxPlayerCount = playerCount
+	}
 	if rule.MaxPlayerCount < rule.MinPlayerCount {
 		rule.MinPlayerCount = rule.MaxPlayerCount
 	}
@@ -1236,24 +1320,25 @@ func NewGameFrame(rule proto.GameRule, r base.RoomFrame, session *remote.Session
 		//gameData:       gameData,
 		logic:                   NewLogic(GameType(rule.GameFrameType), rule.Qidui),
 		baseScore:               baseScore,
+		chairCount:              playerCount,
 		trustTm:                 rule.TrustTm,
 		userWinRecord:           map[string]*UserWinRecord{},
 		reviewRecord:            make([]*ReviewRecord, 0),
-		userTrustArray:          make([]bool, PlayerCount),
+		userTrustArray:          make([]bool, playerCount),
 		gameStarted:             false,
-		testCardArray:           make([]mp.CardID, PlayerCount), //设定测试牌
-		trustTmArray:            make([]int, PlayerCount),
+		testCardArray:           make([]mp.CardID, playerCount), //设定测试牌
+		trustTmArray:            make([]int, playerCount),
 		resultRecord:            make([]*GameResult, 0),
-		scoreRecord:             make([]int, PlayerCount),
-		huRecord:                make([]int, PlayerCount),
-		gongGangRecord:          make([]int, PlayerCount),
-		anGangRecord:            make([]int, PlayerCount),
-		maRecord:                make([]int, PlayerCount),
-		scheduleOperate:         make([]*tasks.Task, PlayerCount),
+		scoreRecord:             make([]int, playerCount),
+		huRecord:                make([]int, playerCount),
+		gongGangRecord:          make([]int, playerCount),
+		anGangRecord:            make([]int, playerCount),
+		maRecord:                make([]int, playerCount),
+		scheduleOperate:         make([]*tasks.Task, playerCount),
 		bankerChairID:           -1,
 		stopTurnScheduleChan:    make(chan struct{}, 1),
 		stopForcePrepareChan:    make(chan struct{}, 1),
-		stopScheduleOperateChan: make(chan int, PlayerCount),
+		stopScheduleOperateChan: make(chan int, playerCount),
 		stopUserTrustSchedule:   make(chan struct{}, 1),
 	}
 	g.resetGame(session)

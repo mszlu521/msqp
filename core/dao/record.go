@@ -6,6 +6,7 @@ import (
 	"core/models/entity"
 	"core/repo"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
@@ -46,6 +47,12 @@ func (d *RecordDao) CreateUserScoreChangeRecord(ctx context.Context, record *ent
 }
 
 func (d *RecordDao) FindSafeBoxOperationRecordPage(ctx context.Context, startIndex int, count int, sortData bson.M, matchData bson.M) ([]*entity.SafeBoxRecord, int64, error) {
+	if startIndex < 0 {
+		startIndex = 0
+	}
+	if count <= 0 {
+		count = 20
+	}
 	collection := d.repo.Mongo.Db.Collection("safeBoxRecord")
 	cursor, err := collection.Find(ctx,
 		matchData,
@@ -57,7 +64,15 @@ func (d *RecordDao) FindSafeBoxOperationRecordPage(ctx context.Context, startInd
 	defer cursor.Close(ctx)
 	var list []*entity.SafeBoxRecord
 	err = cursor.All(ctx, &list)
-	return list, 0, err
+	if err != nil {
+		return nil, 0, err
+	}
+	total, err := collection.CountDocuments(ctx, matchData)
+	if err != nil {
+		logs.Error("FindSafeBoxOperationRecordPage count err:%v", err)
+		return nil, 0, err
+	}
+	return list, total, nil
 }
 
 func (d *RecordDao) CreateSafeBoxOperationRecord(ctx context.Context, record *entity.SafeBoxRecord) error {
@@ -73,6 +88,12 @@ func (d *RecordDao) SaveScoreModifyRecord(ctx context.Context, record *entity.Sc
 }
 
 func (d *RecordDao) FindScoreModifyRecordPage(ctx context.Context, startIndex int, count int, sortData bson.M, matchData bson.M) ([]*entity.ScoreModifyRecord, int64, error) {
+	if startIndex < 0 {
+		startIndex = 0
+	}
+	if count <= 0 {
+		count = 20
+	}
 	collection := d.repo.Mongo.Db.Collection("scoreModifyRecord")
 	cursor, err := collection.Find(ctx,
 		matchData,
@@ -105,11 +126,22 @@ func (d *RecordDao) FindUserGameRecordPage(ctx context.Context, startIndex int, 
 	defer cursor.Close(ctx)
 	var list []*entity.UserGameRecord
 	err = cursor.All(ctx, &list)
+	if err != nil {
+		logs.Error("FindUserGameRecordPage decode error:%v", err)
+		return nil, 0, err
+	}
 	countDocuments, err := collection.CountDocuments(ctx, matchData)
 	return list, countDocuments, err
 }
 
 func (d *RecordDao) SaveGameVideoRecord(ctx context.Context, data *entity.GameVideoRecord) {
+	if data == nil {
+		logs.Error("SaveGameVideoRecord called with nil data")
+		return
+	}
+	if data.Id.IsZero() {
+		data.Id = primitive.NewObjectID()
+	}
 	collection := d.repo.Mongo.Db.Collection("gameVideoRecord")
 	_, err := collection.InsertOne(ctx, data)
 	if err != nil {

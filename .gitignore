@@ -19,6 +19,10 @@ docker/etcd/data/*
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
 
+# Local build and verification artifacts
+.codex-build/
+temp-game-binary
+
 # Dependency directories (remove the comment below to include it)
 # vendor/
 

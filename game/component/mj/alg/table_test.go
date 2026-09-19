@@ -17,9 +17,25 @@ func TestGen(t *testing.T) {
 func TestCheckHu(t *testing.T) {
 	h := NewHuLogic()
 	cards := []mp.CardID{
-		mp.Wan1, mp.Wan1, mp.Wan1, mp.Wan2, mp.Wan3, mp.Wan5, mp.Wan5, mp.Wan5,
-		mp.Tong1, mp.Tong1, mp.Tong1, mp.Zhong, mp.Tong4,
+		mp.Zhong, mp.Wan2, mp.Wan2, mp.Wan6, mp.Wan8, mp.Wan9, mp.Wan9, mp.Tiao8,
+		mp.Tiao8, mp.Tiao8,
 	}
-	checkHu := h.CheckHu(cards, []mp.CardID{mp.Zhong}, mp.Tong2)
+	checkHu := h.CheckHu(cards, []mp.CardID{mp.Zhong}, mp.Wan2)
 	fmt.Println(checkHu)
+}
+
+func TestCheckHuRejectsInvalidCardWithoutPanicking(t *testing.T) {
+	h := NewHuLogic()
+	if h.CheckHu([]mp.CardID{mp.Wan1, 99}, []mp.CardID{mp.Zhong}, mp.Wan2) {
+		t.Fatal("invalid hand card must not win")
+	}
+	if h.CheckHu([]mp.CardID{mp.Wan1}, []mp.CardID{mp.Zhong}, 99) {
+		t.Fatal("invalid incoming card must not win")
+	}
+	if h.CheckHu([]mp.CardID{mp.Wan1, 36}, []mp.CardID{mp.Zhong}, mp.Wan2) {
+		t.Fatal("hidden-card marker must not be accepted by hu logic")
+	}
+	if h.CheckHu([]mp.CardID{mp.Wan1, mp.Wan1, mp.Wan1, mp.Wan1, mp.Wan1}, nil, mp.Wan2) {
+		t.Fatal("a normal tile cannot appear more than four times")
+	}
 }

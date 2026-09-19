@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"sync"
 	"time"
 )
 
@@ -21,6 +22,7 @@ type Register struct {
 	keepAliveCh <-chan *clientv3.LeaseKeepAliveResponse //心跳
 	info        Server                                  //注册的server信息
 	closeCh     chan struct{}
+	closeOnce   sync.Once
 }
 
 func NewRegister() *Register {
@@ -30,7 +32,10 @@ func NewRegister() *Register {
 }
 
 func (r *Register) Close() {
-	r.closeCh <- struct{}{}
+	if r.closeCh == nil {
+		return
+	}
+	r.closeOnce.Do(func() { close(r.closeCh) })
 }
 func (r *Register) Register(conf config.EtcdConf) error {
 	//注册信息
@@ -117,6 +122,7 @@ func (r *Register) keepAlive() (<-chan *clientv3.LeaseKeepAliveResponse, error) 
 func (r *Register) watcher() {
 	//租约到期了 是不是需要去检查是否自动注册
 	ticker := time.NewTicker(time.Duration(r.info.Ttl) * time.Second)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-r.closeCh:
@@ -131,7 +137,12 @@ func (r *Register) watcher() {
 				r.etcdCli.Close()
 			}
 			logs.Info("unregister etcd...")
-		case res := <-r.keepAliveCh:
+			return
+		case res, ok := <-r.keepAliveCh:
+			if !ok {
+				r.keepAliveCh = nil
+				continue
+			}
 			//如果etcd重启了 相当于连接断开 需要进行重新连接 res==nil
 			if res == nil {
 				if err := r.register(); err != nil {

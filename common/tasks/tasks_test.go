@@ -1,7 +1,6 @@
 package tasks
 
 import (
-	"fmt"
 	"testing"
 	"time"
 )
@@ -12,15 +11,18 @@ func TestNewTask(t *testing.T) {
 }
 
 func TestNewTaskScheduler(t *testing.T) {
-	// 创建一个 TaskScheduler
-	tick := 30
-	_ = NewTask("test", time.Second, func() {
-		tick--
-		if tick < 0 {
-			fmt.Println("tick")
+	run := make(chan struct{}, 1)
+	task := NewTask("test", 10*time.Millisecond, func() {
+		select {
+		case run <- struct{}{}:
+		default:
 		}
 	})
+	defer task.Stop()
+
 	select {
-	case <-time.After(100 * time.Second):
+	case <-run:
+	case <-time.After(time.Second):
+		t.Fatal("scheduled task did not run")
 	}
 }

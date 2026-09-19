@@ -69,7 +69,12 @@ func (u *UserHandler) Register(ctx *gin.Context) {
 }
 
 func (u *UserHandler) GetSMSCode(c *gin.Context) {
-	phone := c.PostForm("phoneNumber")
+	var req SMSCodeParams
+	if err := c.ShouldBind(&req); err != nil || req.PhoneNumber == "" {
+		common.Fail(c, biz.RequestDataError)
+		return
+	}
+	phone := req.PhoneNumber
 	if _, err := rpc.UserClient.GetSMSCode(context.TODO(), &pb.GetSMSCodeParams{PhoneNumber: phone}); err != nil {
 		common.Fail(c, msError.ToError(err))
 		return
@@ -123,7 +128,12 @@ func (u *UserHandler) Login(ctx *gin.Context) {
 }
 
 func (u *UserHandler) Reconnection(ctx *gin.Context) {
-	token := ctx.PostForm("token")
+	var req ReconnectionParams
+	if err := ctx.ShouldBind(&req); err != nil {
+		common.Fail(ctx, biz.RequestDataError)
+		return
+	}
+	token := req.Token
 	if token == "" {
 		common.Fail(ctx, biz.RequestDataError)
 		return

@@ -1,23 +1,26 @@
 package sz
 
+import componentproto "game/component/proto"
+
 type MessageReq struct {
 	Type int         `json:"type"`
 	Data MessageData `json:"data"`
 }
 type MessageData struct {
-	Cuopai      bool   `json:"cuopai"`
-	Score       int    `json:"score"`
-	Type        int    `json:"type"` //1 跟注 2 加注
-	ChairID     int    `json:"chairID"`
-	Msg         string `json:"msg"`
-	RecipientID int    `json:"recipientID"`
-	Trust       bool   `json:"trust"`
+	Cuopai      bool                       `json:"cuopai"`
+	Score       int                        `json:"score"`
+	Type        int                        `json:"type"` //1 跟注 2 加注
+	ChairID     int                        `json:"chairID"`
+	Msg         componentproto.ChatMessage `json:"msg"`
+	RecipientID int                        `json:"recipientID"`
+	Trust       bool                       `json:"trust"`
 }
 type GameStatus int
 
 type GameData struct {
 	BankerChairID   int          `json:"bankerChairID"`
 	ChairCount      int          `json:"chairCount"`
+	SelfChairID     int          `json:"selfChairID"`
 	CurBureau       int          `json:"curBureau"`
 	CurScore        int          `json:"curScore"`
 	CurScores       []int        `json:"curScores"`
@@ -156,7 +159,7 @@ type Creator struct {
 	Avatar   string `json:"avatar"`
 }
 
-func gameReviewPushData(list []*BureauReview) any {
+func gameReviewPushData(list [][]*BureauReview) any {
 	return map[string]any{
 		"type": GameReviewPush,
 		"data": map[string]any{
@@ -175,7 +178,7 @@ func gameTrustPushData(chairID int, trust bool) any {
 		"pushRouter": "GameMessagePush",
 	}
 }
-func gameChatPushData(chairID int, types int, msg string, recipientID int) any {
+func gameChatPushData(chairID int, types int, msg any, recipientID int) any {
 	return map[string]any{
 		"type": GameChatPush,
 		"data": map[string]any{

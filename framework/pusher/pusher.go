@@ -20,7 +20,13 @@ func GetPusher() *Pusher {
 }
 
 func (p *Pusher) Push(m *stream.Msg, users []stream.PushUser, data any, router string) {
-	msgData, _ := json.Marshal(data)
+	if p == nil || p.client == nil || p.pushChan == nil || m == nil || m.Body == nil {
+		return
+	}
+	msgData, err := json.Marshal(data)
+	if err != nil {
+		return
+	}
 	pm := stream.PushData{
 		Data:   msgData,
 		Router: router,
@@ -37,6 +43,9 @@ func (p *Pusher) pushChanRead() {
 	for {
 		select {
 		case data := <-p.pushChan:
+			if data == nil || data.Msg == nil || data.Msg.Body == nil || p.client == nil {
+				continue
+			}
 			pushMessage := protocol.Message{
 				Type:  protocol.Push,
 				ID:    data.Msg.Body.ID,

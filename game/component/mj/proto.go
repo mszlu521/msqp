@@ -13,13 +13,13 @@ type MessageReq struct {
 	Data MessageData `json:"data"`
 }
 type MessageData struct {
-	ChairID     int         `json:"chairID"`
-	Type        int         `json:"type"`
-	Msg         string      `json:"msg"`
-	RecipientID int         `json:"recipientID"`
-	Card        mp.CardID   `json:"card"`
-	Operate     OperateType `json:"operate"`
-	Trust       bool        `json:"trust"`
+	ChairID     int               `json:"chairID"`
+	Type        int               `json:"type"`
+	Msg         proto.ChatMessage `json:"msg"`
+	RecipientID int               `json:"recipientID"`
+	Card        mp.CardID         `json:"card"`
+	Operate     OperateType       `json:"operate"`
+	Trust       bool              `json:"trust"`
 }
 
 type GameData struct {
@@ -271,7 +271,7 @@ func GameTurnPushData(chairID int, card mp.CardID, tick int, operateArray []Oper
 	logs.Info("GameTurnPushData: %s", string(marshal))
 	return m
 }
-func GameChatPushData(chairID, t int, msg string, recipientID int) any {
+func GameChatPushData(chairID, t int, msg any, recipientID int) any {
 	return map[string]any{
 		"type": GameChatPush,
 		"data": map[string]any{

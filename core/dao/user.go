@@ -18,7 +18,7 @@ type UserDao struct {
 func (d *UserDao) FindUserByUid(ctx context.Context, uid string) (*entity.User, error) {
 	db := d.repo.Mongo.Db.Collection("user")
 	singleResult := db.FindOne(ctx, bson.D{
-		{"uid", uid},
+		{Key: "uid", Value: uid},
 	})
 	user := new(entity.User)
 	err := singleResult.Decode(user)
@@ -74,10 +74,29 @@ func (d *UserDao) UpdateUserRealName(ctx context.Context, uid string, info strin
 	return err
 }
 
+func (d *UserDao) UpdateEmailArr(ctx context.Context, uid string, emailArr string) error {
+	db := d.repo.Mongo.Db.Collection("user")
+	_, err := db.UpdateOne(ctx, bson.M{"uid": uid}, bson.M{"$set": bson.M{"emailArr": emailArr}})
+	return err
+}
+
+func (d *UserDao) UpdateEmailArrIfCurrent(ctx context.Context, uid string, current string, emailArr string) (bool, error) {
+	db := d.repo.Mongo.Db.Collection("user")
+	result, err := db.UpdateOne(
+		ctx,
+		bson.M{"uid": uid, "emailArr": current},
+		bson.M{"$set": bson.M{"emailArr": emailArr}},
+	)
+	if err != nil {
+		return false, err
+	}
+	return result.MatchedCount == 1, nil
+}
+
 func (d *UserDao) FindUserByPhone(ctx context.Context, phone string) (*entity.User, error) {
 	db := d.repo.Mongo.Db.Collection("user")
 	singleResult := db.FindOne(ctx, bson.D{
-		{"mobilePhone", phone},
+		{Key: "mobilePhone", Value: phone},
 	})
 	user := new(entity.User)
 	err := singleResult.Decode(user)
@@ -117,7 +136,7 @@ func (d *UserDao) FindUserByInviteID(ctx context.Context, inviteID int64) (*enti
 	db := d.repo.Mongo.Db.Collection("user")
 	var user entity.User
 	singleResult := db.FindOne(ctx, bson.D{
-		{"unionInfo.inviteID", inviteID},
+		{Key: "unionInfo.inviteID", Value: inviteID},
 	})
 	err := singleResult.Decode(&user)
 	if err != nil {
@@ -132,10 +151,10 @@ func (d *UserDao) FindUserByInviteID(ctx context.Context, inviteID int64) (*enti
 func (d *UserDao) FindUserPage(ctx context.Context, index int, count int, sortData bson.M, matchData bson.M) (list []*entity.User, total int64, err error) {
 	db := d.repo.Mongo.Db.Collection("user")
 	pipeline := mongo.Pipeline{
-		{{"$match", matchData}},    // 匹配条件
-		{{"$sort", sortData}},      // 排序
-		{{"$skip", int64(index)}},  // 跳过的文档数量
-		{{"$limit", int64(count)}}, // 返回的文档数量
+		{{Key: "$match", Value: matchData}},    // 匹配条件
+		{{Key: "$sort", Value: sortData}},      // 排序
+		{{Key: "$skip", Value: int64(index)}},  // 跳过的文档数量
+		{{Key: "$limit", Value: int64(count)}}, // 返回的文档数量
 	}
 	cursor, err := db.Aggregate(ctx, pipeline)
 	//cursor, err := db.Find(ctx, matchData, options.Find().SetSort(sortData).SetSkip(int64(index)).SetLimit(int64(count)))

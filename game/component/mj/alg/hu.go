@@ -1,9 +1,6 @@
 package alg
 
-import (
-	"fmt"
-	"game/component/mj/mp"
-)
+import "game/component/mj/mp"
 
 var table = NewTable()
 
@@ -28,6 +25,30 @@ func NewHuLogic() *HuLogic {
 // 1A 2A 3A 4A 4A 4A 6A 6A 6A 2B 3B 4B 5C 5C  111303000  011100000 000020000  = hu
 // 先去生成表（所有胡牌的可能） 8张表   feng 8张
 func (h *HuLogic) CheckHu(cardInHandList []mp.CardID, guiList []mp.CardID, cardOngoing mp.CardID) bool {
+	guiCards := make(map[mp.CardID]bool, len(guiList))
+	for _, card := range guiList {
+		guiCards[card] = true
+	}
+	normalCounts := make(map[mp.CardID]int)
+	for _, card := range cardInHandList {
+		if !validCard(card) {
+			return false
+		}
+		if !guiCards[card] {
+			normalCounts[card]++
+		}
+	}
+	if cardOngoing != 0 && !validCard(cardOngoing) {
+		return false
+	}
+	if cardOngoing != 0 && !guiCards[cardOngoing] {
+		normalCounts[cardOngoing]++
+	}
+	for _, count := range normalCounts {
+		if count > 4 {
+			return false
+		}
+	}
 	// 复制 cardInHandList
 	cardList := make([]mp.CardID, len(cardInHandList))
 	copy(cardList, cardInHandList)
@@ -38,8 +59,16 @@ func (h *HuLogic) CheckHu(cardInHandList []mp.CardID, guiList []mp.CardID, cardO
 	return h.isHu(cardList, guiList)
 }
 
+func validCard(card mp.CardID) bool {
+	if card <= 0 || card >= 36 {
+		return false
+	}
+	suit := int(card) / 10
+	rank := int(card) % 10
+	return suit >= 0 && suit < 4 && rank >= 1 && rank <= 9
+}
+
 func (h *HuLogic) isHu(cardList []mp.CardID, guiList []mp.CardID) bool {
-	fmt.Printf("hu cardList:%v guiList:%v", cardList, guiList)
 	// A B C D
 	cards := [][]int{
 		{0, 0, 0, 0, 0, 0, 0, 0, 0},
@@ -57,7 +86,6 @@ func (h *HuLogic) isHu(cardList []mp.CardID, guiList []mp.CardID) bool {
 			cards[i][j]++
 		}
 	}
-	fmt.Printf("hu cards:%v \n", cards)
 	cardData := &CardData{
 		guiCount: guiCount,
 		jiang:    false,

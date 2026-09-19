@@ -9,6 +9,7 @@ import (
 	"core/dao"
 	"core/models/entity"
 	"core/repo"
+	"encoding/json"
 	"fmt"
 	"framework/game"
 	"framework/msError"
@@ -17,6 +18,8 @@ import (
 	"framework/stream"
 	"go.mongodb.org/mongo-driver/bson"
 	hall "hall/models/request"
+	"math"
+	"reflect"
 	"time"
 )
 
@@ -35,9 +38,14 @@ func (s *UserService) FindAndSaveUserByUid(ctx context.Context, uid string, info
 	}
 	if user == nil {
 		//save
+		startGold, err := configuredStartGold()
+		if err != nil {
+			logs.Error("[UserService] invalid startGold config: %v", err)
+			return nil, err
+		}
 		user = &entity.User{}
 		user.Uid = uid
-		user.Gold = int64(game.Conf.GameConfig["startGold"]["value"].(float64))
+		user.Gold = startGold
 		user.Avatar = utils.Default(info.Avatar, "Common/head_icon_default")
 		user.Nickname = utils.Default(info.Nickname, fmt.Sprintf("%s%s", "码神", uid))
 		user.Sex = info.Sex //0 男 1 女
@@ -55,6 +63,60 @@ func (s *UserService) FindAndSaveUserByUid(ctx context.Context, uid string, info
 		user.UnionInfo = []*entity.UnionInfo{}
 	}
 	return user, nil
+}
+
+func configuredStartGold() (int64, error) {
+	if game.Conf == nil {
+		return 0, fmt.Errorf("game config is nil")
+	}
+	startGoldConfig, ok := game.Conf.GameConfig["startGold"]
+	if !ok {
+		return 0, fmt.Errorf("startGold config is missing")
+	}
+	value, ok := startGoldConfig["value"]
+	if !ok || value == nil {
+		return 0, fmt.Errorf("startGold.value is missing")
+	}
+
+	var number float64
+	switch v := value.(type) {
+	case float64:
+		number = v
+	case float32:
+		number = float64(v)
+	case int:
+		number = float64(v)
+	case int8:
+		number = float64(v)
+	case int16:
+		number = float64(v)
+	case int32:
+		number = float64(v)
+	case int64:
+		number = float64(v)
+	case uint:
+		number = float64(v)
+	case uint8:
+		number = float64(v)
+	case uint16:
+		number = float64(v)
+	case uint32:
+		number = float64(v)
+	case uint64:
+		number = float64(v)
+	case json.Number:
+		parsed, err := v.Float64()
+		if err != nil {
+			return 0, fmt.Errorf("startGold.value is not numeric: %w", err)
+		}
+		number = parsed
+	default:
+		return 0, fmt.Errorf("startGold.value has unsupported type %s", reflect.TypeOf(value))
+	}
+	if math.IsNaN(number) || math.IsInf(number, 0) || number < 0 || math.Trunc(number) != number || number >= float64(uint64(1)<<63) {
+		return 0, fmt.Errorf("startGold.value must be a non-negative integer")
+	}
+	return int64(number), nil
 }
 
 func (s *UserService) FindUserByUid(ctx context.Context, uid string) (*entity.User, *msError.Error) {
@@ -110,6 +172,14 @@ func (s *UserService) UpdateUserRealName(uid string, info string) *msError.Error
 		return biz.SqlError
 	}
 	return nil
+}
+
+func (s *UserService) UpdateEmailArr(uid string, emailArr string) error {
+	return s.userDao.UpdateEmailArr(context.TODO(), uid, emailArr)
+}
+
+func (s *UserService) UpdateEmailArrIfCurrent(uid string, current string, emailArr string) (bool, error) {
+	return s.userDao.UpdateEmailArrIfCurrent(context.TODO(), uid, current, emailArr)
 }
 
 func (s *UserService) GetUserData(phone string, uid string) (*entity.User, *msError.Error) {

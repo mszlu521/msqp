@@ -149,7 +149,13 @@ func readGameConfig(configFile string) {
 }
 
 func (c *Config) GetConnector(serverId string) *ConnectorConfig {
+	if c == nil {
+		return nil
+	}
 	for _, v := range c.ServersConf.Connector {
+		if v == nil {
+			continue
+		}
 		if v.ID == serverId {
 			return v
 		}
@@ -158,7 +164,13 @@ func (c *Config) GetConnector(serverId string) *ConnectorConfig {
 }
 
 func (c *Config) GetConnectorByServerType(serverType string) *ConnectorConfig {
+	if c == nil {
+		return nil
+	}
 	for _, v := range c.ServersConf.Connector {
+		if v == nil {
+			continue
+		}
 		if v.ServerType == serverType {
 			return v
 		}
@@ -168,13 +180,12 @@ func (c *Config) GetConnectorByServerType(serverType string) *ConnectorConfig {
 
 func (c *Config) GetFrontGameConfig() map[string]any {
 	result := make(map[string]any)
+	if c == nil {
+		return result
+	}
 	for k, v := range c.GameConfig {
 		value, ok := v["value"]
-		backend := false
-		_, exist := v["backend"]
-		if exist {
-			backend = v["backend"].(bool)
-		}
+		backend, _ := v["backend"].(bool)
 		if ok && !backend {
 			result[k] = value
 		}
