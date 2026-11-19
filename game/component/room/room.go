@@ -62,6 +62,8 @@ type Room struct {
 	hasFinishedOneBureau   bool
 	hasStartedOneBureau    bool
 	alreadyCostUserUidArr  []string
+	rentPaidUserUIDs       map[string]bool
+	creatorRentPaid        bool
 	userJoinGameBureau     map[string]int //记录玩家从第几局加入游戏
 	maxBureau              int            //最大局数
 	curBureau              int            //当前局数
@@ -158,6 +160,10 @@ func (r *Room) resetRoom(session *remote.Session) error {
 	r.gameStarted = false
 	r.hasFinishedOneBureau = false
 	r.hasStartedOneBureau = false
+	r.rentPaidUserUIDs = nil
+	r.creatorRentPaid = false
+	r.alreadyCostUserUidArr = nil
+	r.userJoinGameBureau = make(map[string]int)
 	r.maxBureau = utils.Default(r.GameRule.Bureau, 8)
 	r.curBureau = 0
 	for _, v := range r.users {
@@ -470,7 +476,7 @@ func (r *Room) dismissRoomLocked(session *remote.Session, reason enums.RoomDismi
 			r.union.DestroyRoom(r.Id)
 			return
 		}
-		r.notifyUpdateAllUserInfo(session)
+		r.notifyUpdateAllUserInfoLocked(session)
 		r.sendDataLocked(proto.RoomDismissPushData(reason), session.GetMsg())
 		r.resetRoom(session)
 	}
@@ -724,6 +730,10 @@ func (r *Room) startGame(session *remote.Session, user *proto.RoomUser) {
 }
 
 func NewRoom(roomId string, creatorInfo *proto.RoomCreator, rule proto.GameRule, u base.UnionBase, session *remote.Session) (*Room, error) {
+	// The hall submits AA for legacy game rules without a payment field.
+	if creatorInfo != nil && creatorInfo.CreatorType == enums.UserCreatorType && rule.PayType == 0 {
+		rule.PayType = enums.AAZhiFu
+	}
 	// The 2.4.1 dialog kept the default minimum of four when selecting two
 	// or three seats. Accept those saved Mahjong rules before room validation,
 	// matching the player-count normalization in the legacy Mahjong frame.
@@ -1227,11 +1237,17 @@ func (r *Room) clearOfflineUserLocked(session *remote.Session) {
 }
 
 func (r *Room) notifyUpdateAllUserInfo(session *remote.Session) {
+	r.RLock()
+	defer r.RUnlock()
+	r.notifyUpdateAllUserInfoLocked(session)
+}
+
+func (r *Room) notifyUpdateAllUserInfoLocked(session *remote.Session) {
 	for _, v := range r.users {
 		if v == nil || v.UserInfo == nil || v.ChairID < 0 || v.ChairID >= r.chairCount {
 			continue
 		}
-		r.sendData(proto.UserInfoChangePushData(v.UserInfo), session.GetMsg())
+		r.sendDataLocked(proto.UserInfoChangePushData(v.UserInfo), session.GetMsg())
 	}
 }
 
@@ -1674,6 +1690,9 @@ func (r *Room) getBinWinUidArr(dataList map[string]*proto.RoomUser) []string {
 		}
 		userWinScoreArr = append(userWinScoreArr, user)
 	}
+	if len(userWinScoreArr) == 0 {
+		return nil
+	}
 	//排序
 	sort.Slice(userWinScoreArr, func(i, j int) bool {
 		return userWinScoreArr[i].WinScore > userWinScoreArr[j].WinScore
@@ -1815,69 +1834,123 @@ func (r *Room) getUids() []string {
 }
 
 func (r *Room) collectionRoomRentWhenStart(session *remote.Session) error {
-	if r.RoomCreator.CreatorType == enums.UserCreatorType {
-		var newUserDataArr []*entity.User
-		if r.GameRule.PayType == enums.AAZhiFu {
-			for key, _ := range r.users {
-				savaData := bson.M{
-					"$inc": bson.M{
-						"gold": -r.GameRule.PayDiamond,
-					},
+	if r.RoomCreator.CreatorType == enums.UserCreatorType && r.GameRule.PayType == enums.WinZhiFu {
+		return nil // The match winner is only known at the final settlement.
+	}
+	var unpaid []string
+	for uid, user := range r.users {
+		if user == nil || user.UserInfo == nil || user.ChairID < 0 || user.ChairID >= r.chairCount || r.rentPaidUserUIDs[uid] {
+			continue
+		}
+		unpaid = append(unpaid, uid)
+	}
+	if len(unpaid) == 0 {
+		return nil
+	}
+	charges := make(map[string]int)
+	if r.RoomCreator.CreatorType == enums.UserCreatorType && r.GameRule.PayType == enums.AAZhiFu {
+		for _, uid := range unpaid {
+			charges[uid] = r.GameRule.PayDiamond
+		}
+	} else if r.RoomCreator.CreatorType == enums.UserCreatorType && r.GameRule.PayType == enums.MyPay {
+		if r.creatorRentPaid {
+			return nil
+		}
+		charges[r.RoomCreator.Uid] = r.GameRule.PayDiamond
+	} else if r.RoomCreator.CreatorType == enums.UnionCreatorType {
+		// Union rooms are paid by the union owner, independently of the
+		// private-room payment option saved inside the game rule.
+		payDiamondCount := proto.OneUserDiamondCount(r.GameRule.Bureau, r.GameRule.GameType) * len(unpaid)
+		if payDiamondCount <= 0 || r.union == nil || r.union.GetOwnerUid() == "" {
+			return biz.RequestDataError
+		}
+		charges[r.union.GetOwnerUid()] = payDiamondCount
+	} else {
+		return biz.RequestDataError
+	}
+	if err := r.collectRoomRent(charges, session); err != nil {
+		return err
+	}
+	if r.rentPaidUserUIDs == nil {
+		r.rentPaidUserUIDs = make(map[string]bool)
+	}
+	for _, uid := range unpaid {
+		r.rentPaidUserUIDs[uid] = true
+	}
+	if r.RoomCreator.CreatorType == enums.UserCreatorType && r.GameRule.PayType == enums.MyPay {
+		r.creatorRentPaid = true
+	}
+	return nil
+}
+
+func (r *Room) collectionRoomRentWhenEnd(session *remote.Session) error {
+	if r.RoomCreator.CreatorType != enums.UserCreatorType || r.GameRule.PayType != enums.WinZhiFu || !r.hasFinishedOneBureau || r.creatorRentPaid {
+		return nil
+	}
+	played := r.allPlayedUsersLocked()
+	var winners []string
+	var bestScore int
+	for uid, user := range played {
+		if len(winners) == 0 || user.WinScore > bestScore {
+			bestScore = user.WinScore
+			winners = []string{uid}
+		} else if user.WinScore == bestScore {
+			winners = append(winners, uid)
+		}
+	}
+	if len(winners) == 0 {
+		return nil
+	}
+	if r.GameRule.PayDiamond <= 0 {
+		return biz.RequestDataError
+	}
+	// Split one room fee among all tied winners. Stable UID ordering assigns
+	// indivisible diamonds consistently, independently of Go map iteration.
+	sort.Strings(winners)
+	share, remainder := r.GameRule.PayDiamond/len(winners), r.GameRule.PayDiamond%len(winners)
+	charges := make(map[string]int, len(winners))
+	for index, uid := range winners {
+		amount := share
+		if index < remainder {
+			amount++
+		}
+		if amount > 0 {
+			charges[uid] = amount
+		}
+	}
+	if err := r.collectRoomRent(charges, session); err != nil {
+		return err
+	}
+	r.creatorRentPaid = true
+	return nil
+}
+
+func (r *Room) collectRoomRent(charges map[string]int, session *remote.Session) error {
+	for _, amount := range charges {
+		if amount <= 0 {
+			return biz.RequestDataError
+		}
+	}
+	updated := make([]*entity.User, 0, len(charges))
+	for uid, amount := range charges {
+		user := r.UserService.UpdateUserData(bson.M{"uid": uid, "gold": bson.M{"$gte": amount}}, bson.M{"$inc": bson.M{"gold": -amount}})
+		if user == nil {
+			// Do not leave other AA participants charged if this start fails.
+			for _, charged := range updated {
+				if restored := r.UserService.UpdateUserData(bson.M{"uid": charged.Uid}, bson.M{"$inc": bson.M{"gold": charges[charged.Uid]}}); restored == nil {
+					logs.Error("restore room rent failed room:%s uid:%s", r.Id, charged.Uid)
 				}
-				matchData := bson.M{"uid": key}
-				updated := r.UserService.UpdateUserData(matchData, savaData)
-				if updated == nil {
-					return biz.SqlError
-				}
-				newUserDataArr = append(newUserDataArr, updated)
 			}
-			for _, updateUserData := range newUserDataArr {
-				if updateUserData.FrontendId != "" {
-					r.UserService.UpdateUserDataNotify(updateUserData.Uid, updateUserData.FrontendId, map[string]any{"gold": updateUserData.Gold}, session)
-				}
-			}
-		} else if r.GameRule.PayType == enums.MyPay {
-			newUserData := r.UserService.UpdateUserData(bson.M{"uid": r.RoomCreator.Uid}, bson.M{"$inc": bson.M{"gold": -r.GameRule.PayDiamond}})
-			if newUserData == nil {
-				return biz.NotEnoughGold
-			}
-			if newUserData.FrontendId != "" {
-				r.UserService.UpdateUserDataNotify(newUserData.Uid, newUserData.FrontendId, map[string]any{"gold": newUserData.Gold}, session)
-			}
-		} else {
-			var costUserCount int
-			for uid, user := range r.users {
-				if user.ChairID >= r.chairCount {
-					continue
-				}
-				if utils.IndexOf(r.alreadyCostUserUidArr, uid) != -1 {
-					continue
-				}
-				costUserCount++
-			}
-			if costUserCount == 0 {
-				return nil
-			}
-			payDiamondCount := proto.OneUserDiamondCount(r.GameRule.Bureau, r.GameRule.GameType) * costUserCount
-			if payDiamondCount <= 0 {
-				logs.Error("unsupported room rent rule gameType:%d bureau:%d", r.GameRule.GameType, r.GameRule.Bureau)
-				return biz.RequestDataError
-			}
-			matchData := bson.M{
-				"uid": r.union.GetOwnerUid(),
-			}
-			// 首局开局时检测金币是否足够，不够则解散房间
-			if r.curBureau == 0 {
-				matchData["gold"] = bson.M{"$gte": payDiamondCount}
-			}
-			userData := r.UserService.UpdateUserData(matchData, bson.M{"$inc": bson.M{"gold": -payDiamondCount}})
-			if userData == nil {
-				return biz.NotEnoughGold
-			} else {
-				if userData.FrontendId != "" {
-					r.UserService.UpdateUserDataNotify(userData.Uid, userData.FrontendId, map[string]any{"gold": userData.Gold}, session)
-				}
-			}
+			return biz.NotEnoughGold
+		}
+		updated = append(updated, user)
+	}
+	for _, user := range updated {
+		if seated := r.users[user.Uid]; seated != nil && seated.UserInfo != nil {
+			seated.UserInfo.Gold = user.Gold
+		}
+		if user.FrontendId != "" {
+			r.UserService.UpdateUserDataNotify(user.Uid, user.FrontendId, map[string]any{"gold": user.Gold}, session)
 		}
 	}
 	return nil
@@ -1886,6 +1959,14 @@ func (r *Room) collectionRoomRentWhenStart(session *remote.Session) error {
 func (r *Room) recordAllDrawResult(session *remote.Session) {
 	if !r.hasFinishedOneBureau {
 		return
+	}
+	if err := r.collectionRoomRentWhenEnd(session); err != nil {
+		logs.Error("collect winner room rent failed room:%s err:%v", r.Id, err)
+		var rentError *msError.Error
+		if !errors.As(err, &rentError) {
+			rentError = biz.SqlError
+		}
+		r.sendPopDialogContent(rentError, r.getUids(), session)
 	}
 	// 俱乐部模式下记录游戏数据
 	if r.RoomCreator.CreatorType == enums.UnionCreatorType {

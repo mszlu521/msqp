@@ -26,6 +26,13 @@ func NewSession(cid string, manager *Manager) *Session {
 	}
 }
 
+func (s *Session) ConnectorID() string {
+	if s == nil || s.manager == nil {
+		return ""
+	}
+	return s.manager.ServerId
+}
+
 func (s *Session) Put(key string, v any) {
 	s.Lock()
 	defer s.Unlock()

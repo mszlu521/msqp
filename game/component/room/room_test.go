@@ -531,3 +531,45 @@ func TestKickUserIgnoresStaleUserPointer(t *testing.T) {
 		t.Fatal("stale user pointer removed the current room user")
 	}
 }
+
+func TestFinishedUnionRoomResetsWithoutRelocking(t *testing.T) {
+	r := &Room{
+		RoomCreator: &proto.RoomCreator{CreatorType: enums.UnionCreatorType},
+		GameRule:    proto.GameRule{GameType: enums.SZ, Bureau: 6, MaxPlayerCount: 2, MinPlayerCount: 2, AddScores: []int{1}},
+		chairCount:  2, currentUserCount: 1, roomDismissed: true, hasFinishedOneBureau: true,
+		users:         map[string]*proto.RoomUser{"user": {ChairID: 0, UserInfo: &proto.UserInfo{Uid: "user"}}},
+		kickSchedules: map[string]*time.Timer{},
+	}
+	done := make(chan struct{})
+	go func() {
+		r.Lock()
+		r.dismissRoomLocked(nil, enums.BureauFinished)
+		r.Unlock()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("finished union room deadlocked instead of resetting")
+	}
+	r.Lock()
+	defer r.Unlock()
+	if r.roomDismissed || r.hasFinishedOneBureau || r.GameFrame == nil {
+		t.Fatal("union room did not reset for the next match")
+	}
+	r.hasStartedOneBureau = true // Prevent the asynchronously scheduled idle kick.
+	r.cancelAllScheduler()
+}
+
+func TestBigWinnersAllowsNoPositiveScores(t *testing.T) {
+	r := &Room{alreadyCostUserUidArr: []string{"a", "b"}}
+	for _, scores := range [][2]int{{0, 0}, {-1, -2}} {
+		users := map[string]*proto.RoomUser{
+			"a": {WinScore: scores[0], UserInfo: &proto.UserInfo{Uid: "a"}},
+			"b": {WinScore: scores[1], UserInfo: &proto.UserInfo{Uid: "b"}},
+		}
+		if winners := r.getBinWinUidArr(users); len(winners) != 0 {
+			t.Fatalf("non-positive scores have winners: %v", winners)
+		}
+	}
+}

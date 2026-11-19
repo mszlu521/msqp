@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"framework/game"
 	"framework/net"
+	"go.mongodb.org/mongo-driver/bson"
 )
 
 type EntryHandler struct {
@@ -40,11 +41,17 @@ func (h *EntryHandler) Entry(session *net.Session, body []byte) (any, error) {
 	if err != nil {
 		return common.F(biz.SqlError), nil
 	}
-	session.Uid = uid
 	// 检查帐号冻结
 	if user.IsBlockedAccount {
 		return common.F(biz.BlockedAccount), nil
 	}
+	// Balance and union updates are routed to this connector, including while
+	// the user is in the hall rather than one of the room's seated players.
+	user = h.userService.UpdateUserData(bson.M{"uid": uid}, bson.M{"$set": bson.M{"frontendId": session.ConnectorID()}})
+	if user == nil {
+		return common.F(biz.SqlError), nil
+	}
+	session.Uid = uid
 	//设置用户可以创建联盟
 	user.IsAgent = true
 	return common.S(map[string]any{

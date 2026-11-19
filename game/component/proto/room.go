@@ -116,7 +116,7 @@ func BuildGameRoomUserInfoWithUnion(data *entity.User, unionID int64, connectorI
 var diamondConfig = map[enums.GameType]map[int]int{
 	enums.PDK:  {10: 1, 20: 2},
 	enums.NN:   {10: 1, 20: 2, 30: 3},
-	enums.SZ:   {6: 1, 12: 2, 15: 3, 20: 4},
+	enums.SZ:   {6: 1, 10: 2, 12: 2, 15: 3, 20: 4},
 	enums.SG:   {10: 1, 20: 2, 30: 3},
 	enums.ZNMJ: {8: 1, 16: 2},
 	enums.DGN:  {10: 1, 20: 2, 30: 3},
