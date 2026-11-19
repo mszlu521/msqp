@@ -101,6 +101,21 @@ func TestValidateRoomConfigRejectsMalformedRoom(t *testing.T) {
 	}
 }
 
+func TestNewRoomAcceptsLegacyMahjongPlayerCounts(t *testing.T) {
+	for _, players := range []int{2, 3, 4} {
+		r, err := NewRoom("mahjong-regression", &proto.RoomCreator{}, proto.GameRule{
+			GameType: enums.ZNMJ, GameFrameType: 1, Bureau: 8,
+			MinPlayerCount: 4, MaxPlayerCount: players,
+		}, nil, nil)
+		if err != nil {
+			t.Fatalf("legacy %d-player mahjong create: %v", players, err)
+		}
+		if r.GameRule.MinPlayerCount != players || r.GameRule.MaxPlayerCount != players || r.chairCount != players {
+			t.Fatalf("legacy %d-player mahjong bounds: %#v", players, r.GameRule)
+		}
+	}
+}
+
 func TestNewGameFrameAcceptsValidDGNRule(t *testing.T) {
 	rule := validDGNRule(nil)
 	if _, err := NewGameFrame(rule, nil, nil); err != nil {

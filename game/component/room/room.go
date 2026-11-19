@@ -724,6 +724,12 @@ func (r *Room) startGame(session *remote.Session, user *proto.RoomUser) {
 }
 
 func NewRoom(roomId string, creatorInfo *proto.RoomCreator, rule proto.GameRule, u base.UnionBase, session *remote.Session) (*Room, error) {
+	// The 2.4.1 dialog kept the default minimum of four when selecting two
+	// or three seats. Accept those saved Mahjong rules before room validation,
+	// matching the player-count normalization in the legacy Mahjong frame.
+	if rule.GameType == enums.ZNMJ && rule.MinPlayerCount == 4 && rule.MaxPlayerCount >= 2 && rule.MaxPlayerCount < 4 {
+		rule.MinPlayerCount = rule.MaxPlayerCount
+	}
 	if err := validateRoomConfig(roomId, creatorInfo, rule); err != nil {
 		return nil, err
 	}

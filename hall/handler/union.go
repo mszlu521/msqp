@@ -1888,53 +1888,17 @@ func (h *UnionHandler) GetRank(session *remote.Session, msg []byte) any {
 	if unionData == nil || !canViewUnionRank(unionData.OwnerUid, session.GetUid(), unionData.ShowRank) {
 		return common.F(biz.RequestDataError)
 	}
-	rankMatch := mergeBsonMatch(req.MatchData, bson.M{"unionInfo.unionID": req.UnionID})
-	aggregateData := mongo.Pipeline{
-		bson.D{
-			{Key: "$match", Value: rankMatch},
-		},
-		bson.D{
-			{Key: "$unwind", Value: "$unionInfo"},
-		},
-		bson.D{
-			{Key: "$match", Value: bson.M{"unionInfo.unionID": req.UnionID}},
-		},
-		bson.D{
-			{Key: "$sort", Value: req.SortData},
-		},
-		bson.D{
-			{Key: "$skip", Value: req.StartIndex},
-		},
-		bson.D{
-			{Key: "$limit", Value: req.Count},
-		},
+	if req.StartIndex < 0 || req.Count <= 0 {
+		return common.F(biz.RequestDataError)
 	}
-	var list []*entity.UserAggregate
-	err = h.commonDao.GetStatisticsInfo(context.Background(), "user", aggregateData, &list)
+	var pages []unionRankPage
+	err = h.commonDao.GetStatisticsInfo(context.Background(), "user",
+		unionRankPipeline(req.UnionID, req.MatchData, req.SortData, req.StartIndex, req.Count), &pages)
 	if err != nil {
 		logs.Error("[UnionHandler] GetRank err:%v", err)
 		return common.F(biz.SqlError)
 	}
-	var recordArr []map[string]any
-	for _, v := range list {
-		if v.UnionInfo == nil {
-			continue
-		}
-		recordArr = append(recordArr, map[string]any{
-			"uid":       v.Uid,
-			"nickname":  v.Nickname,
-			"avatar":    v.Avatar,
-			"todayDraw": v.UnionInfo.TodayDraw,
-			"weekDraw":  v.UnionInfo.WeekDraw,
-			"totalDraw": v.UnionInfo.TotalDraw,
-		})
-	}
-	if recordArr == nil {
-		recordArr = []map[string]any{}
-	}
-	return common.S(map[string]any{
-		"recordArr": recordArr,
-	})
+	return common.S(unionRankPayload(pages))
 }
 
 // GetRankSingleDraw
@@ -1955,68 +1919,17 @@ func (h *UnionHandler) GetRankSingleDraw(session *remote.Session, msg []byte) an
 	if unionData == nil || !canViewUnionRank(unionData.OwnerUid, session.GetUid(), unionData.ShowSingleRank) {
 		return common.F(biz.RequestDataError)
 	}
-	rankMatch := mergeBsonMatch(req.MatchData, bson.M{
-		"unionID":    req.UnionID,
-		"createTime": bson.M{"$gte": utils.GetTimeTodayStart()},
-	})
-	groupData := bson.M{
-		"_id": "$userList.uid",
-		"nickname": bson.M{
-			"$first": "$userList.nickname",
-		},
-		"avatar": bson.M{
-			"$first": "$userList.avatar",
-		},
+	if req.StartIndex < 0 || req.Count <= 0 {
+		return common.F(biz.RequestDataError)
 	}
-	if req.SortData["score"] == 1 {
-		groupData["score"] = bson.M{
-			"$min": "$userList.score",
-		}
-	} else {
-		groupData["score"] = bson.M{
-			"$max": "$userList.score",
-		}
-	}
-	aggregateData := mongo.Pipeline{
-		bson.D{
-			{Key: "$match", Value: rankMatch},
-		},
-		bson.D{
-			{Key: "$unwind", Value: "$userList"},
-		},
-		bson.D{
-			{Key: "$match", Value: rankMatch},
-		},
-		bson.D{
-			{Key: "$group", Value: groupData},
-		},
-		bson.D{
-			{Key: "$sort", Value: req.SortData},
-		},
-		bson.D{
-			{Key: "$skip", Value: req.StartIndex},
-		},
-		bson.D{
-			{Key: "$limit", Value: req.Count},
-		},
-	}
-	var list []*entity.UserGameRecordAggregate
-	err = h.commonDao.GetStatisticsInfo(context.Background(), "userGameRecord", aggregateData, &list)
+	var pages []unionRankPage
+	err = h.commonDao.GetStatisticsInfo(context.Background(), "userGameRecord",
+		unionSingleRankPipeline(req.UnionID, utils.GetTimeTodayStart(), req.MatchData, req.SortData, req.StartIndex, req.Count), &pages)
 	if err != nil {
 		logs.Error("[UnionHandler] GetRankSingleDraw err:%v", err)
 		return common.F(biz.SqlError)
 	}
-	var recordArr []*entity.GameUser
-	for _, v := range list {
-		v.UserList.Uid = v.UserList.Id.Hex()
-		recordArr = append(recordArr, v.UserList)
-	}
-	if recordArr == nil {
-		recordArr = []*entity.GameUser{}
-	}
-	return common.S(map[string]any{
-		"recordArr": recordArr,
-	})
+	return common.S(unionRankPayload(pages))
 }
 
 func NewUnionHandler(r *repo.Manager) *UnionHandler {
